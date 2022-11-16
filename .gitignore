@@ -1,0 +1,11 @@
+/*
+!generic
+!kernel
+!kstd
+!ldscripts
+!platform
+
+!.gitignore
+!CMakeLists.txt
+!LICENSE
+!README.md
