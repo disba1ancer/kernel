@@ -43,6 +43,30 @@ typedef enum i686_DescFlag {
     i686_DescFlag_Present = 1 << 15,
 } i686_DescFlag;
 
+typedef enum i686_Interrupt {
+    i686_Interrupt_DE = 0,
+    i686_Interrupt_DB = 1,
+    i686_Interrupt_NMI = 2,
+    i686_Interrupt_BP = 3,
+    i686_Interrupt_OF = 4,
+    i686_Interrupt_BR = 5,
+    i686_Interrupt_UD = 6,
+    i686_Interrupt_NM = 7,
+    i686_Interrupt_DF = 8,
+//    i686_Interrupt_?? = 9,
+    i686_Interrupt_TS = 10,
+    i686_Interrupt_NP = 11,
+    i686_Interrupt_SS = 12,
+    i686_Interrupt_GP = 13,
+    i686_Interrupt_PF = 14,
+//    i686_Interrupt_?? = 15,
+    i686_Interrupt_MF = 16,
+    i686_Interrupt_AC = 17,
+    i686_Interrupt_MC = 18,
+    i686_Interrupt_XM = 19,
+    i686_Interrupt_VE = 20,
+} i686_Interrupt;
+
 typedef struct i686_Descriptor {
     uint32_t low;
     uint32_t high;

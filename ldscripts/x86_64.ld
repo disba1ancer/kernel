@@ -21,6 +21,7 @@ SECTIONS {
     .gcc_except_table : {
         *(.gcc_except_table*)
     }
+    . = . + CONSTANT(MAXPAGESIZE);
     .ctors : ALIGN(16) {
         *(.ctors)
     }
@@ -36,6 +37,10 @@ SECTIONS {
         *(.bss*)
         __bss_end = ALIGN(16);
     }
-    __first_free_page = ALIGN(4096);
-    __mapping_window = 0xFFFFFFFFFFFFF000;
+    __first_free_page = ALIGN(CONSTANT(MAXPAGESIZE));
+    .stack -CONSTANT(MAXPAGESIZE) * 3 : {
+        . = . + CONSTANT(MAXPAGESIZE);
+        __stack_end = .;
+    }
+    __mapping_window = -CONSTANT(MAXPAGESIZE);
 }

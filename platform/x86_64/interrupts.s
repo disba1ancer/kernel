@@ -2,13 +2,14 @@
 
 .text
 .set i, 0
-SizeOfIDT = 4096
+IDTEntries = 256
+SizeOfIDT = 16 * IDTEntries
 
 .section .data.kinterrupts, "aw"
 .align 64
 idt:
 
-.rept 256
+.rept IDTEntries
 .text
 0:      push    i
         jmp     universal_handler
@@ -45,7 +46,7 @@ universal_handler:
         mov     rbp, rsp
         cld
         and     rsp, -16
-        call    kernel_x86_64_UniversalInterruptHandler
+        call    kernel_x86_64_SystemInterruptHandler
         mov     rsp, rbp
         mov     rax,   0[rsp]
         mov     rcx,   8[rsp]
@@ -90,6 +91,44 @@ kernel_x86_64_EnableInterrupts:
         jb      0b
         lidt    idtr
 
+        in      al, 0x21
+        movzx   esi, al
+        in      al, 0xA1
+        movzx   edi, al
+
+        mov     eax, 0x11
+        out     0x20, al
+        out     0x80, al
+        out     0xA0, al
+        out     0x80, al
+
+        mov     eax, 0x40
+        out     0x21, al
+        out     0x80, al
+        mov     eax, 0x48
+        out     0xA1, al
+        out     0x80, al
+
+        mov     eax, 4
+        out     0x21, al
+        out     0x80, al
+        mov     eax, 2
+        out     0xA1, al
+        out     0x80, al
+
+        mov     eax, 1
+        out     0x21, al
+        out     0x80, al
+        out     0xA1, al
+        out     0x80, al
+
+        mov     eax, esi
+        out     0x21, al
+        out     0x80, al
+        mov     eax, edi
+        out     0xA1, al
+        out     0x80, al
+
         in      al, 0x70
         and     al, 0x7f
         out     0x70, al
@@ -97,6 +136,40 @@ kernel_x86_64_EnableInterrupts:
 
         sti
 
+        ret
+
+.global kernel_x86_64_SendEOI
+.type kernel_x86_64_SendEOI, @function
+kernel_x86_64_SendEOI:
+        test    edi, edi
+        mov     eax, 0x20
+        jz      0f
+        out     0xA0, al
+0:      out     0x20, al
+        ret
+
+.global kernel_x86_64_IsSpuriousIRQ
+.type kernel_x86_64_IsSpuriousIRQ, @function
+kernel_x86_64_IsSpuriousIRQ:
+        test    edi, edi
+        mov     eax, 0xB
+        jz      0f
+        out     0xA0, al
+        out     0x80, al
+        in      al, 0xA0
+        and     eax, 0x80
+        ret
+0:      out     0x20, al
+        out     0x80, al
+        in      al, 0x20
+        and     eax, 0x80
+        ret
+
+.global kernel_x86_64_KeyboardIRQ
+.type kernel_x86_64_KeyboardIRQ, @function
+kernel_x86_64_KeyboardIRQ:
+        in      al, 0x60
+        mov     [0xb8000], al
         ret
 
 .data

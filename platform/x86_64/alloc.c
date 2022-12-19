@@ -54,6 +54,11 @@ const kernel_MemoryMap* kernel_AllocateInitialStack(const kernel_LdrData* data)
     return NULL;
 }
 
+int kernel_InitAllocator(const kernel_LdrData* data)
+{
+    return 0;
+}
+
 void* malloc(size_t size)
 {
     (void)size;
