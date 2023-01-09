@@ -1,0 +1,23 @@
+#ifndef _CSTRING
+#define _CSTRING
+
+#ifdef __cplusplus
+#define _KSTD_CPPMODE
+
+#ifdef _STRING_H
+
+#undef _STRING_H
+#include "string.h"
+#define _STRING_H
+
+#else
+
+#include "string.h"
+#undef _STRING_H
+
+#endif
+
+#undef _KSTD_CPPMODE
+#endif // __cplusplus
+
+#endif // _CSTRING

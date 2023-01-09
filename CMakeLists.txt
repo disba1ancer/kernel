@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.25)
 
 set(CMAKE_SYSTEM_NAME elf)
 #set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)

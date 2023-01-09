@@ -2,7 +2,7 @@
 .text
 .global _start
 _start:
-        mov     rax, offset __stack_end - 0x38
+        mov     rax, offset __init_stack_end - 0x38
         mov     0[rax], rbx
         mov     8[rax], rsp
         mov     16[rax], rbp

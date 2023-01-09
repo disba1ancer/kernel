@@ -1,17 +1,31 @@
-#ifndef STRING_H
-#define STRING_H
+#ifndef _STRING_H
+#define _STRING_H
 
+#include "kstd/btstdbeg.h"
+
+#ifdef _KSTD_CPPMODE
+#include <cstddef>
+namespace std {
+#else
 #include <stddef.h>
-#include "btstdbeg.h"
+#endif
+
+_KSTD_EXTERN_BEGIN
 
 void* memset(void* dst, int val, size_t size);
-void* memcpy(void* KSTD_RESTRICT dst, const void* KSTD_RESTRICT src, size_t size);
+void* memcpy(void* _KSTD_RESTRICT dst, const void* _KSTD_RESTRICT src, size_t size);
 void* memmove(void* dst, const void* src, size_t size);
 int memcmp(const void* dst, const void* src, size_t size);
 int strcmp(const char* dst, const char* src);
 size_t strlen(const char* dst);
 char* strchr(const char* dst, int ch);
 
-#include "btstdend.h"
+_KSTD_EXTERN_END
 
-#endif // STRING_H
+#ifdef _KSTD_CPPMODE
+} // namespace std
+#endif
+
+#include "kstd/btstdend.h"
+
+#endif // _STRING_H

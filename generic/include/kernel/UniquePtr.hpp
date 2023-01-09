@@ -4,7 +4,7 @@
 #include <type_traits>
 #include <cstdint>
 
-namespace kernel {
+namespace kernel::intrusive {
 
 template <typename T>
 struct DefaultDeleter;
@@ -124,6 +124,6 @@ public:
     }
 };
 
-}
+} // namespace kernel::intrusive
 
 #endif // KERNEL_UNIQUEPTR_H
