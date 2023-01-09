@@ -102,8 +102,8 @@ typedef enum i686_PageEntryFlag {
     i686_PageEntryFlag_Present = 1 << 0,
     i686_PageEntryFlag_Write = 1 << 1,
     i686_PageEntryFlag_User = 1 << 2,
-    i686_PageEntryFlag_OnlyReadCache = 1 << 3,
-    i686_PageEntryFlag_NoCache = 1 << 4,
+    i686_PageEntryFlag_PWT = 1 << 3, // Cache write through
+    i686_PageEntryFlag_PCD = 1 << 4, // Disable cache
     i686_PageEntryFlag_Accessed = 1 << 5,
     i686_PageEntryFlag_Dirty = 1 << 6,
     i686_PageEntryFlag_PAT = 1 << 7,
@@ -119,37 +119,80 @@ typedef struct i686_PageEntry {
 #ifndef __cplusplus
 #define i686_MakePageEntry(phyPage, flags) i686_internal_MakePageEntry(phyPage, flags)
 #else
-constexpr inline i686_PageEntry i686_MakeSegDescriptor(uint32_t phyPage, uint32_t flags)
+constexpr inline i686_PageEntry i686_MakePageEntry(uint32_t phyPage, uint32_t flags)
 {
     return i686_internal_MakePageEntry(phyPage, flags);
 }
 #undef i686_internal_MakePageEntry
 #endif
 
+typedef enum x86_64_PageEntryFlag {
+    x86_64_PageEntryFlag_ExecDisable = 1 << 0,
+    x86_64_PageEntryFlag_Present = 1 << 1,
+    x86_64_PageEntryFlag_Write = 1 << 2,
+    x86_64_PageEntryFlag_User = 1 << 3,
+    x86_64_PageEntryFlag_PWT = 1 << 4, // Cache write through
+    x86_64_PageEntryFlag_PCD = 1 << 5, // Disable cache
+    x86_64_PageEntryFlag_Accessed = 1 << 6,
+    x86_64_PageEntryFlag_Dirty = 1 << 7,
+    x86_64_PageEntryFlag_PAT = 1 << 8,
+    x86_64_PageEntryFlag_Global = 1 << 9,
+} x86_64_PageEntryFlag;
+
 typedef struct x86_64_PageEntry {
     alignas(8) uint64_t data;
 } x86_64_PageEntry;
 
-#define x86_64_internal_MakePageEntry(phyPage, flags) { ((phyPage) & 0xFFFFFFFFFFFFF000U) | ((flags) & 0xFFFU) }
+#define x86_64_internal_MakePageEntry(phyPage, flags, pk) { \
+    ((phyPage) & 0x07FFFFFFFFFFF000U) | \
+    ((((uint64_t)(flags) >> 1) | ((uint64_t)(flags) << 63)) & 0x8000000000000FFF) | \
+    ((uint64_t)(pk) & 0xF) << 59 }
 
 #ifndef __cplusplus
-#define x86_64_MakePageEntry(phyPage, flags) x86_64_internal_MakePageEntry(phyPage, flags)
+#define x86_64_MakePageEntry(phyPage, flags, pk) x86_64_internal_MakePageEntry(phyPage, flags, pk)
 #else
-constexpr inline x86_64_PageEntry x86_64_MakeSegDescriptor(uint64_t phyPage, uint32_t flags)
+constexpr inline x86_64_PageEntry x86_64_MakePageEntry(uint64_t phyPage, int flags, int pk = 0)
 {
-    return x86_64_internal_MakePageEntry(phyPage, flags);
+    return x86_64_internal_MakePageEntry(phyPage, flags, pk);
 }
 #undef x86_64_internal_MakePageEntry
 #endif
 
-inline uint64_t x86_64_PageEntry_GetAddr(const x86_64_PageEntry* entry)
+inline uint64_t x86_64_PageEntry_GetAddr(x86_64_PageEntry entry)
 {
-    return entry->data & 0xFFFFFFFFFFFFF000U;
+    return entry.data & 0x07FFFFFFFFFFF000U;
 }
 
-inline uint32_t x86_64_PageEntry_GetFlags(const x86_64_PageEntry* entry)
+inline int x86_64_PageEntry_GetFlags(x86_64_PageEntry entry)
 {
-    return entry->data & 0xFFFU;
+    return (((entry.data) << 1) | (entry.data >> 63)) & 0x1FFFU;
+}
+
+inline int x86_64_PageEntry_GetProtectionKey(x86_64_PageEntry entry)
+{
+    return (entry.data >> 59) & 0xFU;
+}
+
+inline void x86_64_FlushPageTLB(volatile void* addr)
+{
+    __asm__ volatile("invlpg (%0)"::"r"(addr):"memory");
+}
+
+inline void* x86_64_FlushPageTLB2(uintptr_t addr)
+{
+    void* result;
+    __asm__ volatile(
+        "invlpg (%1)\n\
+        movq %1, %0"
+    :"=r"(result):"r"(addr):"memory");
+    return result;
+}
+
+inline x86_64_PageEntry x86_64_LoadCR3(void)
+{
+    x86_64_PageEntry r;
+    __asm__("mov %%cr3, %0":"=r"(r.data));
+    return r;
 }
 
 typedef struct i686_InterruptFrame {

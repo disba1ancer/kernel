@@ -142,12 +142,14 @@ size_t kernel_UToStr(char* str, size_t size, unsigned num, int radix);
 #ifndef __cplusplus
 #define kernel_UToStr(str, size, num, radix) _Generic(num,\
     unsigned long long : kernel_ULLToStr(str, size, num, radix),\
-    unsigned long long : kernel_ULToStr(str, size, num, radix),\
-    unsigned long long : kernel_UToStr(str, size, num, radix))
+    unsigned long : kernel_ULToStr(str, size, num, radix),\
+    unsigned : kernel_UToStr(str, size, num, radix))
 #endif
 
 #ifdef __cplusplus
 } // extern "C"
+
+#include <concepts>
 
 namespace kernel {
 
@@ -157,14 +159,14 @@ NS_FUNC(kernel_, DoublyLinkedList_Add)
 NS_FUNC(kernel_, DoublyLinkedList_Remove)
 
 template <typename A, typename B>
-requires (requires(A a, B b) { a < b; })
+requires (requires(A a, B b) { { a < b } -> std::convertible_to<bool>; })
 constexpr auto Min(const A& a, const B& b) -> decltype(a + b) {
     using T = decltype(a + b);
     return (T(a) < T(b)) ? a : b;
 }
 
 template <typename A, typename B>
-requires (requires(A a, B b) { a > b; })
+requires (requires(A a, B b) { { a > b } -> std::convertible_to<bool>; } )
 constexpr auto Max(const A& a, const B& b) -> decltype(a + b) {
     using T = decltype(a + b);
     return (T(a) > T(b)) ? a : b;

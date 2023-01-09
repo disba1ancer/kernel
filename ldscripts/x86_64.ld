@@ -1,6 +1,6 @@
 ENTRY(_start)
 
-__binary_load_address = 0xFFFFFFFFC0000000;
+__binary_load_address = -0x80000000;
 
 SECTIONS {
     . = __binary_load_address + SIZEOF_HEADERS;
@@ -35,12 +35,13 @@ SECTIONS {
         __bss_start = .;
         *(COMMON)
         *(.bss*)
-        __bss_end = ALIGN(16);
+        __bss_end = ALIGN(CONSTANT(MAXPAGESIZE));
     }
-    __first_free_page = ALIGN(CONSTANT(MAXPAGESIZE));
-    .stack -CONSTANT(MAXPAGESIZE) * 3 : {
-        . = . + CONSTANT(MAXPAGESIZE);
-        __stack_end = .;
+    . = ALIGN(-64K, CONSTANT(MAXPAGESIZE));
+    .stack : {
+        __init_stack_start = .;
+        . = -CONSTANT(MAXPAGESIZE);
+        __init_stack_end = .;
     }
-    __mapping_window = -CONSTANT(MAXPAGESIZE);
+    __mapping_window_entry = .;
 }

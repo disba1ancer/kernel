@@ -2,8 +2,9 @@ add_library(platform_x86_64 STATIC EXCLUDE_FROM_ALL)
 add_library(platform ALIAS platform_x86_64)
 
 target_sources(platform_x86_64 PRIVATE
-    alloc.c
+    alloc.cpp
     alloc.h
+    alloc.s
     exit.c
     init.c
     init.cpp
@@ -21,7 +22,7 @@ target_sources(platform_x86_64 PRIVATE
     strlen.s
 )
 
-target_link_libraries(platform_x86_64 PUBLIC generic)
+target_link_libraries(platform_x86_64 PRIVATE kstd generic)
 target_link_options(platform_x86_64 INTERFACE -z max-page-size=0x1000)
 
 add_custom_target(crti

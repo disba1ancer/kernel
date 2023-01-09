@@ -4,6 +4,10 @@
 #include "util.h"
 #include <stdalign.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 KERNEL_STRUCT(kernel_LdrData) {
     alignas(8)
     uint64_t type;
@@ -35,5 +39,9 @@ KERNEL_STRUCT(kernel_MemoryMap) {
     uint64_t count;
     uint64_t allocatedBoundary;
 };
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // KERNEL_BOOTDATA_H
