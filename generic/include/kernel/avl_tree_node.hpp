@@ -201,7 +201,7 @@ private:
     NodeType* node;
 };
 
-}
+} // namespace avl_tree_detail
 
 template <typename T>
 struct AVLTreeNodeTraitsHelper :
@@ -224,6 +224,6 @@ private:
     NodeType* node;
 };
 
-}
+} // namespace kernel::intrusive
 
 #endif // AVL_TREE_NODE_H

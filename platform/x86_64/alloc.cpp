@@ -36,110 +36,32 @@
  * IGNORE UNDEFINED BEHAVIOR WITH POINTERS
  */
 
-#include <cstdlib>
-#include <climits>
-#include <limits>
 #include <exception>
-#include "alloc.h"
+#include <new>
 #include "kernel/bootdata.h"
+#include "kernel/util.hpp"
+#include "kernel/util.h"
+#include "kernel/avl_tree.hpp"
+#include "kernel/list.hpp"
 #include "processor.h"
-#include <kernel/UniquePtr.hpp>
-#include <kernel/util.hpp>
-#include <kernel/list.hpp>
-#include <kernel/avl_tree.hpp>
-#include <atomic>
-#include "kernel/allocator.hpp"
+#include <cstring>
+
+using kernel::ptr_cast;
 
 namespace {
 
-constexpr auto BasicPageMask = 4095;
-constexpr auto BasicPageSize = 4096;
+constexpr auto PageSize = 4096;
+constexpr auto PageMask = PageSize - 1;
+constexpr std::uint64_t InvalidPage = -1;
 
-using kernel::ptr_cast;
-using kernel::As;
+} // namespace
 
-template <typename T>
-constexpr bool ValWithinRange(auto val)
-{
-    using nl = std::numeric_limits<T>;
-    return nl::min() <= val && val <= nl::max();
-}
+extern "C" const kernel_LdrData* kernel_LoaderData;
+extern "C" x86_64_PageEntry __mapping_window[];
+extern "C" alignas(PageSize) unsigned char __smheap_start[];
+extern "C" alignas(PageSize) unsigned char __smheap_end[];
 
-template <long long val>
-class LeastTypeByValue {
-    static constexpr bool c = ValWithinRange<signed char>(val);
-    static constexpr bool s = c || ValWithinRange<short>(val);
-    static constexpr bool i = s || ValWithinRange<int>(val);
-    static constexpr bool l = i || ValWithinRange<long>(val);
-    static constexpr bool ll = l || ValWithinRange<long long>(val);
-    using t1 = std::conditional_t<ll, long long, void>;
-    using t2 = std::conditional_t<l, long, t1>;
-    using t3 = std::conditional_t<i, int, t2>;
-    using t4 = std::conditional_t<s, short, t3>;
-public:
-    using Type = std::conditional_t<c, signed char, t4>;
-};
-
-template <long long val>
-using LeastTypeByValueT = typename LeastTypeByValue<val>::Type;
-
-template <unsigned long long val>
-class LeastUTypeByValue {
-    static constexpr bool c = ValWithinRange<unsigned char>(val);
-    static constexpr bool s = c || ValWithinRange<unsigned short>(val);
-    static constexpr bool i = s || ValWithinRange<unsigned int>(val);
-    static constexpr bool l = i || ValWithinRange<unsigned long>(val);
-    static constexpr bool ll = l || ValWithinRange<unsigned long long>(val);
-    using t1 = std::conditional_t<ll, unsigned long long, void>;
-    using t2 = std::conditional_t<l, unsigned long, t1>;
-    using t3 = std::conditional_t<i, unsigned int, t2>;
-    using t4 = std::conditional_t<s, unsigned short, t3>;
-public:
-    using Type = std::conditional_t<c, unsigned char, t4>;
-};
-
-template <unsigned long long val>
-using LeastUTypeByValueT = typename LeastUTypeByValue<val>::Type;
-
-template <typename T>
-constexpr
-auto AlignDown(T s, T align) -> T
-{
-    return s ^ (s & (align - 1));
-}
-
-template <typename T>
-constexpr
-auto AlignUp(T s, T align) -> T
-{
-    return AlignDown(s + align - 1, align);
-}
-
-auto AlignDownPtr(void* s, std::size_t align) -> void*
-{
-    auto mask = align - 1;
-    auto offset = ptr_cast<std::uintptr_t>(s) & mask;
-    auto bptr = As<std::byte*>(s) - offset;
-    return bptr;
-}
-
-template <typename A, typename B>
-struct MaxAlign {
-    static constexpr
-    auto Value = kernel::Max(alignof(A), alignof(B));
-};
-
-template <typename A, typename B>
-constexpr auto MaxAlignV = MaxAlign<A, B>::Value;
-
-template <typename A, typename B>
-struct MaxSize {
-    static constexpr
-    auto Value = kernel::Max(sizeof(A), sizeof(B));
-};
-
-template <typename A, typename B>
-constexpr auto MaxSizeV = MaxSize<A, B>::Value;
+namespace {
 
 auto FindMemoryMap(const kernel_LdrData* data) -> const kernel_MemoryMap*
 {
@@ -152,10 +74,10 @@ auto FindMemoryMap(const kernel_LdrData* data) -> const kernel_MemoryMap*
     return NULL;
 }
 
-auto FindFirstAvailableEntry(const kernel_MemoryMapEntry* entries, size_t count)
+auto FindFirstAvailableEntry(const kernel_MemoryMapEntry* entries, std::uint64_t count)
     -> const kernel_MemoryMapEntry*
 {
-    for (size_t i = 0; i < count; ++i) {
+    for (uint64_t i = 0; i < count; ++i) {
         if (entries[i].type == kernel_MemoryMapEntryType_AvailableMemory &&
             (entries[i].flags & 0xF) == 1)
         {
@@ -165,1163 +87,767 @@ auto FindFirstAvailableEntry(const kernel_MemoryMapEntry* entries, size_t count)
     return NULL;
 }
 
-auto FindBoundaryEntry(const kernel_MemoryMapEntry* entries, uint64_t boundary)
-    -> std::size_t
-{
-    auto entry = entries;
-    while (!(boundary - entry->begin <= entry->size)) {
+auto FindBoundaryEntry(
+        const kernel_MemoryMapEntry *entries,
+        std::uint64_t count,
+        std::uint64_t boundary
+)
+-> std::ptrdiff_t {
+    auto end = entries + count;
+    auto entry = FindFirstAvailableEntry(entries, count);
+    while (entry != end && !(boundary - entry->begin <= entry->size)) {
         ++entry;
     }
-    return std::size_t(entry - entries);
+    return entry - entries;
 }
 
+auto CanonizeAddr(std::uintptr_t addr) -> std::uintptr_t
+{
+    return addr | ((addr >= 0x800000000000) * 0xFFFF800000000000);
 }
 
-extern x86_64_PageEntry __mapping_window_entry;
-extern byte __bss_end[];
-extern byte __init_stack_start[];
-extern byte __miniheap[];
-
-extern "C" const kernel_LdrData* kernel_LoaderData;
-
-enum PhyAllocError {
-    PhyAllocError_SuccessEmpty,
-    PhyAllocError_NoMem,
-    PhyAllocError_OutOfAddressSpace,
+struct ISinglePageAlloc {
+    virtual auto alloc() -> std::uint64_t = 0;
+    virtual void free(std::uint64_t) = 0;
 };
 
-enum FlagsGeneric {
-    FlagsGeneric_Reserve = 1,
-    FlagsGeneric_Read,
-    FlagsGeneric_Write = 4,
-    FlagsGeneric_Execute = 8
-};
-
-enum FlagsInternal {
-    FlagsInternal_Present = 1,
-    FlagsInternal_Kernel,
-};
-
-template <typename T, std::size_t size>
-requires(sizeof(T) < size && alignof(T) < size)
-class ChunkedAllocator {
-    using ValueType = T;
-    static constexpr
-    auto StorageUnitAlign = MaxAlignV<T, std::size_t>;
-    static constexpr
-    auto StorageUnitSize = AlignUp(MaxSizeV<T, std::size_t>, StorageUnitAlign);
-    struct ChunkHeader {
-        ChunkHeader()
-        {
-            auto ptr = GetStorage();
-            std::size_t i = 0;
-            while (i != StorageUnitCount - 1) {
-                new(ptr) std::size_t(++i);
-                ptr += StorageUnitSize;
-            }
-            new(ptr) std::size_t(std::size_t(-1));
-        }
-
-        T* Alloc()
-        {
-            if (Full()) {
-                return nullptr;
-            }
-            auto allocElem = GetStorageUnit(brk);
-            brk = *As<std::size_t*>(allocElem);
-            ++count;
-            allocElem = new(allocElem) std::byte[StorageUnitSize];
-            return *As<T(*)[1]>(allocElem);
-        }
-
-        void Free(T* elem)
-        {
-            auto freeElem = As<std::byte*>(elem);
-            auto freeElemNum = GetStorageUnitNum(freeElem);
-            new(freeElem) std::size_t(brk);
-            brk = freeElemNum;
-            --count;
-        }
-
-        auto GetStorage() -> std::byte*
-        {
-            return As<std::byte*>(this) + StorageOffset;
-        }
-
-        auto GetStorageUnit(std::size_t n) -> std::byte*
-        {
-            return GetStorage() + n * StorageUnitSize;
-        }
-
-        auto GetStorageUnitNum(std::byte* unit) -> std::size_t
-        {
-            return std::size_t(unit - GetStorage()) / StorageUnitSize;
-        }
-
-        bool Full()
-        {
-            return brk == std::size_t(-1);
-        }
-
-        bool Empty()
-        {
-            return count == 0;
-        }
-
-        kernel::intrusive::ListNode<> elem;
-        std::size_t brk = 0;
-        std::size_t count = 0;
-    };
-    static constexpr
-    auto StorageOffset = AlignUp(sizeof(ChunkHeader), StorageUnitAlign);
-    static constexpr
-    auto StorageUnitCount = (size - StorageOffset) / StorageUnitSize;
-    static constexpr
-    auto offset = offsetof(ChunkHeader, elem);
-    using CastPolicy = kernel::intrusive::OffsetCastPolicy<offset>;
-    using List = kernel::intrusive::List<ChunkHeader, CastPolicy>;
-public:
-    ChunkedAllocator(void* initialPage) :
-        lastUsed(new(initialPage) ChunkHeader{})
-    {
-        storageList.PushBack(*lastUsed);
-    }
-
-    T* Alloc()
-    {
-        if (!lastUsed->Full()) {
-            return lastUsed->Alloc();
-        }
-        for (auto& storage : storageList) {
-            if (!storage.Full()) {
-                lastUsed = &storage;
-                return lastUsed->Alloc();
-            }
-        }
-        // TODO: Add function for chunk allocation
-        return nullptr;
-    }
-
-    void Free(T* elem)
-    {
-        if (elem == nullptr) {
-            return;
-        }
-        auto storage = As<ChunkHeader*>(AlignDownPtr(elem, size));
-        storage->Free(elem);
-        if (lastUsed != storage && lastUsed->Empty()) {
-            storageList.Erase(*lastUsed);
-            // TODO: Add function for chunk deallocation
-            lastUsed = storage;
-        }
-    }
-private:
-    List storageList;
-    ChunkHeader* lastUsed;
-};
-
-struct Test {
-
-    struct Node {
-        using AVLTreeNode = kernel::intrusive::AVLTreeNode<>;
-        AVLTreeNode addrNode;
-        AVLTreeNode sizeNode;
-        uintptr_t addr;
-        size_t size;
-    };
-
-    ChunkedAllocator<Node, 4096> storage;
-};
-
-class VMMFreeList {
-private:
-    struct Node {
-        using AVLTreeNode = kernel::intrusive::AVLTreeNode<>;
-        AVLTreeNode addrNode;
-        AVLTreeNode sizeNode;
-        uintptr_t addr;
-        size_t size;
-    };
-
-    using Allocator = ChunkedAllocator<Node, 4096>;
-
-    template <typename ... A>
-    using AVLTree = kernel::intrusive::AVLTree<A...>;
-    template <auto mptr>
-    struct FieldComparator {
-        bool operator()(const Node& a, const Node& b) const noexcept
-        {
-            return (a.*mptr) < (b.*mptr);
-        }
-    };
-    static constexpr
-    auto addrOffset = offsetof(Node, addrNode);
-    using AddrCastPol = kernel::intrusive::OffsetCastPolicy<addrOffset>;
-    static constexpr
-    auto sizeOffset = offsetof(Node, sizeNode);
-    using SizeCastPol = kernel::intrusive::OffsetCastPolicy<sizeOffset>;
-    using AVLAddrTree =
-        kernel::intrusive::AVLTree<Node, FieldComparator<&Node::addr>, AddrCastPol>;
-    using AVLSizeTree =
-        kernel::intrusive::AVLTree<Node, FieldComparator<&Node::size>, SizeCastPol>;
-public:
-    struct MemoryRange {
-        uintptr_t begin;
-        size_t size;
-    };
-
-    VMMFreeList(void* initialPage) :
-        alloc(initialPage)
-    {}
-
-    void ReleaseRange(MemoryRange r)
-    {
-        std::uintptr_t end = AlignAndCalcEnd(r);
-        end = kernel::Max(r.begin, end);
-        if (r.begin == end) {
-            return;
-        }
-        if (addrList.Empty()) {
-            AddMemoryRegion(r.begin, r.size);
-            return;
-        }
-        auto crBegin = addrList.UpperBound(r.begin);
-        auto crEnd = addrList.LowerBound(end);
-        if (crBegin != addrList.Begin()) {
-            --crBegin;
-        }
-        int count = CountMerges(crBegin, crEnd, r);
-        if (count > 1 || IsIntersect(*crBegin, r)) {
-            return;
-        }
-        std::uintptr_t rBeginEnd = crBegin->addr + crBegin->size;
-        if (count == 0 && crEnd != addrList.End() && crEnd->addr == end) {
-            sizeList.Erase(*crEnd);
-            crEnd->addr = r.begin;
-            crEnd->size += r.size;
-            sizeList.Insert(*crEnd);
-            return;
-        }
-        if (rBeginEnd == r.begin) {
-            sizeList.Erase(*crBegin);
-            crBegin->size = end - crBegin->addr;
-            Node* node = nullptr;
-            if (crEnd != addrList.End() && crEnd->addr == end) {
-                crBegin->size += crEnd->size;
-                node = crEnd.operator->();
-                Erase(*node);
-            }
-            sizeList.Insert(*crBegin);
-            alloc.Free(node);
-            return;
-        }
-        AddMemoryRegion(r.begin, r.size);
-    }
-
-    auto AcquireRange(std::size_t size) -> MemoryRange
-    {
-        size = AlignUp<std::size_t>(size, BasicPageSize);
-        auto crBegin = sizeList.LowerBound(size);
-        auto crEnd = sizeList.UpperBound(size);
-        if (crBegin != crEnd) {
-            auto node = crBegin.operator->();
-            return AcquireIdealMatch(node);
-        }
-        if (crEnd == sizeList.End()) {
-            return { 0, 0 };
-        }
-        auto& node = *crEnd;
-        MemoryRange result = {node.addr, size};
-        node.addr += size;
-        sizeList.Erase(node);
-        node.size -= size;
-        sizeList.Insert(node);
-        return result;
-    }
-
-    bool AcquireRangeAt(MemoryRange r)
-    {
-        std::uintptr_t rEnd = AlignAndCalcEnd(r);
-        auto cr = addrList.UpperBound(r.size);
-        if (cr == addrList.Begin()) {
-            return false;
-        }
-        --cr;
-        if (!Contains(*cr, r)) {
-            return false;
-        }
-        std::uintptr_t crEnd = cr->addr + cr->size;
-        auto t = (cr->addr == r.begin) * 2 + (crEnd == rEnd);
-        switch (t) {
-            case 0b00:
-                sizeList.Erase(*cr);
-                cr->size = r.begin - cr->addr;
-                sizeList.Insert(*cr);
-                AddMemoryRegion(rEnd, crEnd - rEnd);
-                break;
-            case 0b01:
-                sizeList.Erase(*cr);
-                cr->size -= r.size;
-                sizeList.Insert(*cr);
-                [[fallthrough]];
-            case 0b10:
-                cr->addr += r.size;
-                break;
-            case 0b11:
-                AcquireIdealMatch(cr.operator->());
-                break;
-        }
-        return true;
-    }
-
-    auto AlignAndCalcEnd(MemoryRange& r) -> std::uintptr_t
-    {
-        std::uintptr_t end = r.begin + r.size;
-        r.begin = AlignDown<std::uintptr_t>(r.begin, BasicPageSize);
-        end = AlignUp<std::uintptr_t>(end, BasicPageSize);
-        r.size = end - r.begin;
-        return end;
-    }
-private:
-    auto AcquireIdealMatch(Node* node) -> MemoryRange
-    {
-        MemoryRange result = {node->addr, node->size};
-        Erase(*node);
-        alloc.Free(node);
-        return result;
-    }
-
-    void AddMemoryRegion(std::uintptr_t addr, std::size_t size)
-    {
-        auto node = alloc.Alloc();
-        node->addr = addr;
-        node->size = size;
-        Insert(*node);
-    }
-
-    int CountMerges(
-        AVLAddrTree::Iterator rBegin, AVLAddrTree::Iterator rEnd, MemoryRange r)
-    {
-        std::uintptr_t end = r.begin + r.size;
-        end = kernel::Max(r.begin, end);
-        auto listBegin = addrList.Begin();
-        if (rBegin != listBegin) {
-            --rBegin;
-        }
-        int count = 0;
-        for (auto it = rBegin; it != rEnd; ++it) {
-            auto itEnd = it->addr + it->size;
-            count += (r.begin <= itEnd && end >= it->addr);
-            if (count > 1) {
-                return count;
-            }
-        }
-        return count;
-    }
-
-    static bool IsIntersect(Node& node, MemoryRange r)
-    {
-        std::uintptr_t nodeEnd = node.addr + node.size;
-        std::uintptr_t rEnd = r.begin + r.size;
-        return node.addr < rEnd && nodeEnd > r.begin;
-    }
-
-    static bool Contains(Node& node, MemoryRange r)
-    {
-        std::uintptr_t nodeEnd = node.addr + node.size;
-        std::uintptr_t rEnd = r.begin + r.size;
-        return node.addr <= r.begin && rEnd <= nodeEnd;
-    }
-
-    void Insert(Node& node)
-    {
-        addrList.Insert(node);
-        sizeList.Insert(node);
-    }
-
-    void Erase(Node& node)
-    {
-        addrList.Erase(node);
-        sizeList.Erase(node);
-    }
-
-    Allocator alloc;
-    AVLAddrTree addrList;
-    AVLSizeTree sizeList;
-};
-
-class BuddyMemoryManager {
-
-};
-
-class MemoryMapper {
-public:
-    static constexpr
-    auto EntriesPerPageLog = 9;
-    static constexpr
-    auto EntriesPerPage = 1 << EntriesPerPageLog;
-    static constexpr
-    auto PageDirAddr = uintptr_t(-0x800000000000);
-    static constexpr
-    auto PageTableSize =
-        std::uintptr_t(EntriesPerPage) *
-        EntriesPerPage *
-        EntriesPerPage *
-        EntriesPerPage;
-    static constexpr
-    auto PageTableMask = PageTableSize - 1;
-    static constexpr
-    auto PageTableLevels = 4;
-    static constexpr
-    auto SpecialIndex = 0400400400400u;
-    static constexpr
-    auto FlagsAllAccess = x86_64_PageEntryFlag_Present |
-            x86_64_PageEntryFlag_Write;
+struct Mapper
+{
     static void Init()
     {
-        constexpr auto windowAddress = std::uintptr_t(-0x200000);
-        x86_64_PageEntry entry = x86_64_LoadCR3();
+        auto entry = x86_64_LoadCR3();
         entry = x86_64_MakePageEntry(
             x86_64_PageEntry_GetAddr(entry),
             x86_64_PageEntryFlag_Present | x86_64_PageEntryFlag_Write,
             0
         );
-        __mapping_window_entry = entry;
+        __mapping_window[511] = entry;
+        x86_64_FlushPageTLB(&__mapping_window);
+        __mapping_window[256] = entry;
         __asm__ volatile("":::"memory");
-        auto localPagetable =
-            std::launder(ptr_cast<x86_64_PageEntry*>(windowAddress));
-        localPagetable[128] = entry;
-        __asm__ volatile("":::"memory");
-        __mapping_window_entry = {0};
-        x86_64_FlushPageTLB(localPagetable);
-        RemapPageUnsafe(&__mapping_window_entry);
+        UnmapUnsafe(&__mapping_window);
     }
-
-    static void* GetPageByIndex(uintptr_t index)
-    {
-        return ptr_cast<void*>(index * BasicPageSize);
+    static auto Table(std::ptrdiff_t index) -> x86_64_PageEntry&
+    {//0400400400400
+        return *(ptr_cast<x86_64_PageEntry*>(-0x800000000000) + index);
     }
-
-    static auto GetPageEntry(size_t index) -> x86_64_PageEntry*
+    static auto TableByAddr(void* addr) -> x86_64_PageEntry&
     {
-        return *As<x86_64_PageEntry(*)[]>(
-            ptr_cast<void*>(PageDirAddr)) + index;
+        return TableByAddr(ptr_cast<std::uintptr_t>(addr));
     }
-
-    static auto GetPageEntryByPtr(const void* ptr) -> x86_64_PageEntry*
+    static auto TableByAddr(std::uintptr_t addr) -> x86_64_PageEntry&
     {
-        return GetPageEntry((ptr_cast<uintptr_t>(ptr) / BasicPageSize) &
-            PageTableMask);
+        return Table((addr / PageSize) & 0xFFFFFFFFF);
     }
-
-    static int ToPlatformFlags(int flags, int intFlags)
+    static auto UnmapUnsafe(void* addr) -> std::uint64_t
     {
-        bool read = flags & FlagsGeneric_Read;
-        bool write = flags & FlagsGeneric_Write;
-        bool execute = flags & FlagsGeneric_Execute;
-        bool present = intFlags & FlagsInternal_Present;
-        bool kernel = intFlags & FlagsInternal_Kernel;
-        int result =
-            x86_64_PageEntryFlag_Write * write |
-            x86_64_PageEntryFlag_ExecDisable * !execute |
-            x86_64_PageEntryFlag_User * !kernel |
-            x86_64_PageEntryFlag_Present * present;
+        auto& entry = TableByAddr(addr);
+        auto result = x86_64_PageEntry_GetAddr(entry);
+        entry = {};
+        x86_64_FlushPageTLB(addr);
         return result;
     }
-
-    static
-    void MapPageUnsafe(void* vAddr, int flags, std::uint64_t pAddr)
+    static void* MapUnsafe(std::uintptr_t vAddr, std::uint64_t pAddr)
     {
-        x86_64_PageEntry* pe = GetPageEntryByPtr(vAddr);
-        *pe = x86_64_MakePageEntry(pAddr, flags, 0);
-        __asm__ volatile("":::"memory");
+        TableByAddr(vAddr) = x86_64_MakePageEntry(
+            pAddr, x86_64_PageEntryFlag_Present | x86_64_PageEntryFlag_Write);
+        auto ptr = ptr_cast<void*>(vAddr);
+        x86_64_FlushPageTLB(ptr);
+        return ptr;
     }
-
-    static
-    auto RemapPageUnsafe(void* vAddr, int flags = 0, std::uint64_t pAddr = 0)
-        -> std::uint64_t
+    static bool FillEntries(
+        std::ptrdiff_t begin, std::ptrdiff_t end,
+        ISinglePageAlloc* alloc)
     {
-        x86_64_PageEntry* pe = GetPageEntryByPtr(vAddr);
-        auto result = x86_64_PageEntry_GetAddr(*pe);
-        *pe = x86_64_MakePageEntry(pAddr, flags, 0);
-        x86_64_FlushPageTLB(vAddr);
-        return result;
-    }
-
-    static auto SwapPages(void* vAddr, x86_64_PageEntry n) -> x86_64_PageEntry
-    {
-        x86_64_PageEntry* pe = GetPageEntryByPtr(vAddr);
-        auto result = *pe;
-        *pe = n;
-        x86_64_FlushPageTLB(vAddr);
-        return result;
-    }
-
-    static void MapPageTablePage(void* vAddr, std::uint64_t pAddr)
-    {
-        int flags =
-            x86_64_PageEntryFlag_Present |
-            x86_64_PageEntryFlag_Write;
-        MapPageUnsafe(vAddr, flags, pAddr);
-        x86_64_FlushPageTLB(vAddr);
-    }
-
-    static void* MapPage(void* vAddr, int flags, std::uint64_t pAddr)
-    {
-        auto pe = GetPageEntryByPtr(vAddr);
-        auto pde = GetPageEntryByPtr(pe);
-        auto pdptre = GetPageEntryByPtr(pde);
-        auto pml4e = GetPageEntryByPtr(pdptre);
-        if (!(x86_64_PageEntry_GetFlags(*pml4e) & x86_64_PageEntryFlag_Present)) {
-            return pdptre;
-        }
-        if (!(x86_64_PageEntry_GetFlags(*pdptre) & x86_64_PageEntryFlag_Present)) {
-            return pde;
-        }
-        if (!(x86_64_PageEntry_GetFlags(*pde) & x86_64_PageEntryFlag_Present)) {
-            return pe;
-        }
-        *pe = x86_64_MakePageEntry(pAddr, flags, 0);
-        x86_64_FlushPageTLB(vAddr);
-        return vAddr;
-    }
-
-    static bool IsPagePresent(x86_64_PageEntry* entry)
-    {
-        return x86_64_PageEntry_GetFlags(*entry) & x86_64_PageEntryFlag_Present;
-    }
-
-    static bool IsLeastOnePresent(x86_64_PageEntry* eBeg, x86_64_PageEntry* eEnd)
-    {
-        for (auto i = eBeg; i != eEnd; ++i) {
-            if (IsPagePresent(i)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    static unsigned IsPageNotPresent(x86_64_PageEntry* entry,
-        x86_64_PageEntry* entryCache[])
-    {
-        entryCache[0] = entry;
-        for (int i = 1; i < PageTableLevels; ++i) {
-            auto entry  = GetPageEntryByPtr(entryCache[i - 1]);
-            if (entryCache[i] == entry) {
-                break;
-            }
-            entryCache[i] = entry;
-        }
-        for (unsigned i = PageTableLevels; i > 0;) {
-            --i;
-            if (!IsPagePresent(entryCache[i])) {
-                return i + 1;
-            }
-        }
-        return 0;
-    }
-
-    static bool IsFullyUnmapped(VirtualRange r)
-    {
-        auto peBegin = ptr_cast<std::uintptr_t>(r.start);
-        auto peEnd = peBegin + r.size;
-        peBegin = (peBegin / BasicPageSize) & PageTableMask;
-        peEnd = (peEnd / BasicPageSize) & PageTableMask;
-        auto pageTable = GetPageEntry(0);
-        x86_64_PageEntry* entryCache[4] = { nullptr };
-        auto lEdge = IsPageNotPresent(pageTable + peBegin, entryCache);
-        if (lEdge == 0) {
-            return false;
-        }
-        auto nextAlign = std::uintptr_t(1) << ((lEdge - 1) * EntriesPerPageLog);
-        for (auto i = AlignUp(peBegin + 1, nextAlign); i < peEnd;) {
-            auto lEdge = IsPageNotPresent(pageTable + i, entryCache);
-            if (lEdge == 0) {
+        for (auto i = begin; i < end; ++i) {
+            auto p = alloc->alloc();
+            if (p == InvalidPage) {
+                ClearEntries(begin, i, alloc);
                 return false;
             }
-            i += std::uintptr_t(1) << ((lEdge - 1) * EntriesPerPageLog);
+            Table(i) = x86_64_MakePageEntry(
+                p, x86_64_PageEntryFlag_Present | x86_64_PageEntryFlag_Write);
+        }
+        if (end > begin) {
+            auto addr = CanonizeAddr(std::uintptr_t(begin) * PageSize);
+            std::memset(ptr_cast<void*>(addr), 0, PageSize);
+            addr = CanonizeAddr(std::uintptr_t(end - 1) * PageSize);
+            std::memset(ptr_cast<void*>(addr), 0, PageSize);
         }
         return true;
     }
-
-    static auto CountPageTablePages(VirtualRange r)
-        -> std::size_t
+    static void ClearEntries(
+        std::ptrdiff_t begin, std::ptrdiff_t end,
+        ISinglePageAlloc* alloc)
     {
-        if (!IsFullyUnmapped(r)) {
-            return std::size_t(-1);
+        for (auto i = end; i > begin;) {
+            --i;
+            auto& t = Table(i);
+            auto ptr = x86_64_PageEntry_GetAddr(t);
+            t = {};
+            auto addr = CanonizeAddr(std::uintptr_t(i) * PageSize);
+            x86_64_FlushPageTLB(ptr_cast<void*>(addr));
+            alloc->free(ptr);
         }
-        auto peBegin = ptr_cast<std::uintptr_t>(r.start);
-        auto peEnd = peBegin + r.size;
-        peBegin = (peBegin / BasicPageSize) & PageTableMask;
-        peEnd = (peEnd / BasicPageSize) & PageTableMask;
-        auto begin = peBegin;
-        auto end = peEnd;
-        auto result = std::size_t(0);
-        for (int i = 0; i < PageTableLevels - 1; ++i) {
-            begin = (begin + EntriesPerPage + 1) / EntriesPerPage;
-            end = end / EntriesPerPage;
-            result += end - begin;
+    }
+    static bool EntriesPresent(std::ptrdiff_t begin, std::ptrdiff_t end)
+    {
+        for (auto i = begin; i != end; ++i) {
+            auto &t = Table(i);
+            if (t.data & x86_64_PageEntryFlag_Present) {
+                return false;
+            }
         }
-        auto pageTable = GetPageEntry(0);
-        x86_64_PageEntry* entryCache[4] = { nullptr };
-        result += IsPageNotPresent(pageTable + peBegin, entryCache) - 1;
-        result += IsPageNotPresent(pageTable + peEnd - 1, entryCache) - 1;
+        return true;
+    }
+    struct Args {
+        ISinglePageAlloc* alloc;
+        std::ptrdiff_t begin;
+        std::ptrdiff_t end;
+        int level;
+    };
+    static bool FillLevels(Args* args)
+    {
+        if (args->level == 3) {
+            return true;
+        }
+        auto levelID = (0400400400000U << (args->level * 9)) & 0xFFFFFFFFF;
+        auto level = 3 - args->level;
+        auto begin = (args->begin >> (level * 9)) | levelID;
+        auto end = args->end - 1 + (1 << (level * 9));
+        end = (end >> (level * 9)) | levelID;
+        if (Table(begin).data & x86_64_PageEntryFlag_Present) {
+            ++begin;
+        }
+        if (Table(end - 1).data & x86_64_PageEntryFlag_Present) {
+            --end;
+        }
+        if (!FillEntries(begin, end, args->alloc)) {
+            return false;
+        }
+        args->level += 1;
+        if (FillLevels(args)) [[likely]] {
+            return true;
+        }
+        ClearEntries(begin, end, args->alloc);
+        return false;
+    }
+    static void ClearLevels(Args* args)
+    {
+        auto levelID = 0400000000000U;
+        for (int i = 2; i != 0; --i) {
+            levelID |= levelID >> 9;
+            args->begin = (args->begin >> 9) | levelID;
+            args->end = args->end - 1 + (1 << (i * 9));
+            args->end = (args->end >> 9) | levelID;
+            if (args->end <= args->begin) {
+                return;
+            }
+            ClearEntries(args->begin, args->end, args->alloc);
+            if (EntriesPresent(args->begin & 0777777777000, args->begin)) {
+                args->begin += 0777;
+            }
+            auto newEnd = args->end + 0777;
+            if (!EntriesPresent(args->end, newEnd & 0777777777000)) {
+                args->end = newEnd;
+            }
+        }
+    }
+    struct LinearAddrGen : ISinglePageAlloc {
+        LinearAddrGen(std::uint64_t paddr) : next(paddr) {}
+        auto alloc() -> std::uint64_t {
+            auto result = next;
+            next += PageSize;
+            return result;
+        }
+        void free(std::uint64_t) {}
+        std::uint64_t next;
+    };
+    static bool MapWithAlloc(std::uintptr_t vaddr, std::ptrdiff_t size,
+        ISinglePageAlloc *alloc, ISinglePageAlloc *ptAlloc)
+    {
+        Args args = {};
+        args.alloc = ptAlloc;
+        args.begin = (vaddr / PageSize) & 0xFFFFFFFFF;
+        args.end = ((vaddr + size + PageMask) / PageSize) & 0xFFFFFFFFF;
+        if (!FillLevels(&args)) {
+            return false;
+        }
+        if (FillEntries(args.begin, args.end, alloc)) [[likely]] {
+            return true;
+        }
+        ClearLevels(&args);
+        return false;
+    }
+    static bool Map(std::uintptr_t vaddr, std::ptrdiff_t size,
+                    std::uint64_t paddr, ISinglePageAlloc *ptAlloc)
+    {
+        LinearAddrGen alloc(paddr);
+        return MapWithAlloc(vaddr, size, &alloc, ptAlloc);
+    }
+    static void UnmapWithAlloc(std::uintptr_t vaddr, std::ptrdiff_t size,
+        ISinglePageAlloc *alloc, ISinglePageAlloc *ptAlloc)
+    {
+        Mapper::Args args = {};
+        args.alloc = ptAlloc;
+        args.begin = (vaddr / PageSize) & 0xFFFFFFFFF;
+        args.end = ((vaddr + size + PageMask) / PageSize) & 0xFFFFFFFFF;
+        ClearEntries(args.begin, args.end, alloc);
+        if (EntriesPresent(args.begin & 0777777777000, args.begin)) {
+            args.begin += 0777;
+        }
+        auto newEnd = args.end + 0777;
+        if (!EntriesPresent(args.end, newEnd & 0777777777000)) {
+            args.end = newEnd;
+        }
+        ClearLevels(&args);
+    }
+    static void Unmap(std::uintptr_t vaddr, std::ptrdiff_t size,
+        ISinglePageAlloc *ptAlloc)
+    {
+        LinearAddrGen alloc(0);
+        UnmapWithAlloc(vaddr, size, &alloc, ptAlloc);
+    }
+};
+
+struct SinglePagePMM : ISinglePageAlloc
+{
+    using CMapEntry = const kernel_MemoryMapEntry;
+    SinglePagePMM()
+    {
+        auto memmap = FindMemoryMap(kernel_LoaderData);
+        auto entries = ptr_cast<CMapEntry*>(memmap->entries);
+        boundary = memmap->allocatedBoundary;
+        count = memmap->count;
+        map = entries;
+        current = FindBoundaryEntry(map, count, boundary);
+    }
+    auto alloc() -> std::uint64_t
+    {
+        if (lastFree != InvalidPage) {
+            auto result = lastFree;
+            auto ptr = ptr_cast<std::uintptr_t>(&__mapping_window);
+            auto next = ptr_cast<std::uint64_t*>(Mapper::MapUnsafe(ptr, result));
+            lastFree = *std::launder(next);
+            Mapper::UnmapUnsafe(next);
+            return result;
+        }
+        auto cEnd = map[current].begin + map[current].size;
+        if (cEnd == boundary) {
+            if (current == count) {
+                return InvalidPage;
+            }
+            boundary = map[++current].begin;
+        }
+        auto result = boundary;
+        boundary += PageSize;
+        return result;
+    }
+    void free(std::uint64_t addr)
+    {
+        auto ptr = ptr_cast<std::uintptr_t>(&__mapping_window);
+        auto next = ptr_cast<std::uint64_t*>(Mapper::MapUnsafe(ptr, addr));
+        *std::launder(next) = lastFree;
+        Mapper::UnmapUnsafe(next);
+        lastFree = addr;
+    }
+    CMapEntry* map;
+    std::ptrdiff_t count;
+    std::ptrdiff_t current;
+    std::uint64_t boundary;
+    std::uint64_t lastFree = InvalidPage;
+};
+
+template <typename T, typename ... TT>
+struct max_size
+{
+    static constexpr auto value = kernel::Max(sizeof(T), max_size<TT...>::value);
+};
+
+template <typename ... T>
+constexpr auto max_size_v = max_size<T...>::value;
+
+template <class T, class M>
+constexpr T reset_bits(T in, M bitmask)
+{
+    return in ^ (bitmask & in);
+}
+
+struct address_node {
+    address_node* children[2];
+    address_node* parent;
+    std::uintptr_t addressCompressed;
+    auto get_address() const -> std::uintptr_t
+    {
+        return reset_bits(addressCompressed, 3);
+    }
+    void set_address(std::uintptr_t addr)
+    {
+        addressCompressed = addr | (addressCompressed & 3);
+    }
+    auto get_balance() const -> int
+    {
+        return ((addressCompressed & 3) ^ 2) - 2;
+    }
+    void set_balance(int balance)
+    {
+        addressCompressed = reset_bits(addressCompressed, 3) | (balance & 3);
+    }
+};
+
+struct size_node {
+    size_node* children[2];
+    size_node* parent;
+    std::ptrdiff_t sizeCompressed;
+    auto get_size() const -> std::ptrdiff_t
+    {
+        return reset_bits(sizeCompressed, 3);
+    }
+    void set_size(std::ptrdiff_t size)
+    {
+        sizeCompressed = size | (sizeCompressed & 3);
+    }
+    auto get_balance() const -> int
+    {
+        return ((sizeCompressed & 3) ^ 2) - 2;
+    }
+    void set_balance(int balance)
+    {
+        sizeCompressed = reset_bits(sizeCompressed, 3) | (balance & 3);
+    }
+};
+
+} // namespace
+
+namespace kernel::intrusive {
+
+template <>
+struct AVLTreeNodeTraits<address_node>
+{
+    static auto GetParent(const address_node& node) -> address_node*
+    {
+        return node.parent;
+    }
+    static void SetParent(address_node& node, address_node* parent)
+    {
+        node.parent = parent;
+    }
+    static auto GetChild(const address_node& node, bool right) -> address_node*
+    {
+        return node.children[right];
+    }
+    static void SetChild(address_node& node, bool right, address_node* child)
+    {
+        node.children[right] = child;
+    }
+    static  int GetBalance(const address_node& node)
+    {
+        return node.get_balance();
+    }
+    static void SetBalance(address_node& node, int balance)
+    {
+        node.set_balance(balance);
+    }
+};
+
+template <>
+struct AVLTreeNodeTraits<size_node>
+{
+    static auto GetParent(const size_node& node) -> size_node*
+    {
+        return node.parent;
+    }
+    static void SetParent(size_node& node, size_node* parent)
+    {
+        node.parent = parent;
+    }
+    static auto GetChild(const size_node& node, bool right) -> size_node*
+    {
+        return node.children[right];
+    }
+    static void SetChild(size_node& node, bool right, size_node* child)
+    {
+        node.children[right] = child;
+    }
+    static  int GetBalance(const size_node& node)
+    {
+        return node.get_balance();
+    }
+    static void SetBalance(size_node& node, int balance)
+    {
+        node.set_balance(balance);
+    }
+};
+
+} // namespace kernel::intrusive
+
+namespace  {
+
+struct free_range
+{
+    free_range* children[2];
+    std::uintptr_t parent;
+    std::uintptr_t address;
+    std::ptrdiff_t size;
+};
+
+struct free_range_comparator
+{
+    bool operator()(const free_range& a, const free_range& b) const
+    {
+        auto av = reinterpret_cast<std::uintptr_t>(kernel::AddressOf(a));
+        auto bv = reinterpret_cast<std::uintptr_t>(kernel::AddressOf(b));
+        return av < bv;
+    }
+    bool operator()(void* const& a, const free_range& b) const
+    {
+        auto av = reinterpret_cast<std::uintptr_t>(a);
+        auto bv = reinterpret_cast<std::uintptr_t>(kernel::AddressOf(b));
+        return av < bv;
+    }
+    bool operator()(const free_range& a, void* const& b) const
+    {
+        auto av = reinterpret_cast<std::uintptr_t>(kernel::AddressOf(a));
+        auto bv = reinterpret_cast<std::uintptr_t>(b);
+        return av < bv;
+    }
+};
+
+} // namespace
+
+namespace kernel::intrusive {
+
+template <>
+struct AVLTreeNodeTraits<free_range>
+{
+    static auto GetParent(const free_range& node) -> free_range*
+    {
+        return ptr_cast<free_range*>(node.parent ^ (3 & node.parent));
+    }
+    static void SetParent(free_range& node, free_range* parent)
+    {
+        node.parent = (node.parent & 3) | ptr_cast<std::uintptr_t>(parent);
+    }
+    static auto GetChild(const free_range& node, bool right) -> free_range*
+    {
+        return node.children[right];
+    }
+    static void SetChild(free_range& node, bool right, free_range* child)
+    {
+        node.children[right] = child;
+    }
+    static  int GetBalance(const free_range& node)
+    {
+        return node.parent & 3;
+    }
+    static void SetBalance(free_range& node, int balance)
+    {
+        node.parent = (node.parent ^ (3 & node.parent)) | balance;
+    }
+};
+
+template <>
+struct ListNodeTraits<free_range> {
+    using NodeType = free_range;
+    using SentinelType = free_range;
+    static auto GetNext(NodeType& node) -> NodeType* {
+        return node.children[1];
+    }
+    static void SetNext(NodeType& node, NodeType* next) {
+        node.children[1] = next;
+    }
+    static auto GetPrev(NodeType& node) -> NodeType* {
+        return node.children[0];
+    }
+    static void SetPrev(NodeType& node, NodeType* prev) {
+        node.children[0] = prev;
+    }
+};
+
+} // namespace kernel::intrusive
+
+namespace  {
+
+constexpr auto align(std::size_t size, std::size_t align) -> std::size_t
+{
+    auto t = (size + align - 1);
+    return reset_bits(t, align - 1);
+}
+
+template <class T, std::size_t storageSize>
+struct chunked_mem_pool
+{
+    using list_node = kernel::intrusive::ListNode<>;
+    struct free_obj : list_node {};
+    using list = kernel::intrusive::List<free_obj>;
+
+    static constexpr auto max_align = kernel::Max(alignof(T), alignof(free_obj));
+    static constexpr auto max_size = kernel::Max(sizeof(T), sizeof(free_obj));
+    static constexpr auto obj_size = align(max_size, max_align);
+    static constexpr auto objs_per_storage = ptrdiff_t(storageSize / obj_size);
+
+    void add_storage(void* storage)
+    {
+        auto current = static_cast<unsigned char*>(storage);
+        for (ptrdiff_t i = 0; i < objs_per_storage; ++i) {
+            auto& obj = *new(current) free_obj;
+            freeObjs.PushBack(obj);
+            current += obj_size;
+        }
+    }
+
+    bool empty()
+    {
+        return freeObjs.Empty();
+    }
+
+    template <class ... Init>
+    T* alloc(Init&& ... init)
+    {
+        if (empty()) {
+            return nullptr;
+        }
+        auto last = (--freeObjs.End()).operator->();
+        freeObjs.PopBack();
+        last->~free_obj();
+        return new(last) T(std::forward<Init>(init)...);
+    }
+
+    template <class ... Init>
+    void free(T* obj)
+    {
+        obj->~T();
+        freeObjs.PushBack(*new(obj) free_obj);
+    }
+
+    list freeObjs;
+};
+
+struct VMM
+{
+    struct mem_range
+    {
+        std::uintptr_t begin;
+        std::uintptr_t end;
+    };
+    struct free_range : address_node, size_node {};
+
+    void ReleaseRange(const mem_range& range)
+    {
+        if (range.begin == range.end) {
+            return;
+        }
+        auto r = range;
+        AdjustRange(r);
+        if (addressTree.Empty()) {
+            AddMemoryRegion(r);
+            return;
+        }
+        auto crBegin = addressTree.UpperBound(by_end(r.begin));
+        auto crEnd = addressTree.LowerBound(r.end);
+        if (crBegin != crEnd) {
+            std::terminate();
+        }
+        if (crBegin != addressTree.Begin()) {
+            auto prev = crBegin; --prev;
+            auto& prevNode = *prev;
+            sizeTree.Erase(prevNode);
+            if (crBegin != addressTree.End() && r.end == crBegin->get_address()) {
+                prevNode.set_size(r.end - prev->get_address() + crBegin->get_size());
+                Erase(*crBegin);
+            } else {
+                prevNode.set_size(r.end - prev->get_address());
+            }
+            sizeTree.Insert(prevNode);
+            return;
+        }
+        if (crBegin != addressTree.End() && r.end == crBegin->get_address()) {
+            auto& prevNode = *crBegin;
+            sizeTree.Erase(prevNode);
+            prevNode.set_size(r.end + prevNode.get_size() - r.begin);
+            sizeTree.Insert(prevNode);
+            return;
+        }
+        AddMemoryRegion(r);
+    }
+
+    auto AcquireRange(std::size_t size) -> mem_range
+    {
+        if (size == 0) {
+            return {};
+        }
+        size = align(size, PageSize);
+        auto crBegin = sizeTree.LowerBound(size);
+        auto crEnd = sizeTree.UpperBound(size);
+        if (crBegin != crEnd) {
+            auto node = crBegin.operator->();
+            return AcquireIdealMatch(node);
+        }
+        if (crEnd == sizeTree.End()) {
+            return {};
+        }
+        auto& node = *crEnd;
+        mem_range result = {node.get_address(), node.get_address() + size};
+        node.set_address(result.end);
+        sizeTree.Erase(node);
+        node.set_size(node.get_size() - size);
+        sizeTree.Insert(node);
         return result;
     }
 
-    static auto MapRegion(void* vAddr, int flags, PhysicalRange r)
-        -> std::size_t
+    void AdjustRange(mem_range& r)
     {
-        VirtualRange virtRange = { .start = vAddr, .size = r.size };
-        auto pageCount = CountPageTablePages(virtRange);
-        return virtRange.size;
-    }
-
-    static void UnmapPage(void* vAddr)
-    {
-        MapPage(vAddr, 0, 0);
-    }
-};
-
-class LinearPMM {
-public:
-    LinearPMM(const kernel_LdrData* data) :
-        memmap(FindMemoryMap(data)),
-        brk(memmap->allocatedBoundary),
-        brkRegion(
-            FindBoundaryEntry(
-                FindFirstAvailableEntry(
-                    ptr_cast<const kernel_MemoryMapEntry*>(memmap->entries),
-                    memmap->count
-                ), brk)),
-        lastFree(std::uint64_t(-1))
-    {}
-
-    auto Alloc(std::size_t size, void* tempPage) -> PhysicalRange
-    {
-        if (size == 0) {
-            return {
-                .error = PhyAllocError_SuccessEmpty,
-                .size = 0
-            };
-        }
-        size = AlignUp<std::size_t>(size, BasicPageSize);
-        if (lastFree != std::uint64_t(-1)) {
-            return AllocFromStack(size, tempPage);
-        }
-        using Entry = const kernel_MemoryMapEntry*;
-        auto regions = ptr_cast<Entry>(uintptr_t(memmap->entries));
-        auto region = regions + brkRegion;
-        auto regionStart = region->begin;
-        auto regionEnd = regionStart + region->size;
-        regionStart = AlignUp<std::uint64_t>(regionStart, BasicPageSize);
-        if (regionStart > UINTPTR_MAX) {
-            return {
-                .error = PhyAllocError_OutOfAddressSpace,
-                .size = 0
-            };
-        }
-        regionEnd = AlignDown<std::uint64_t>(regionEnd, BasicPageSize);
-        size_t allocatedSize = kernel::Min(regionEnd - brk, std::uint64_t(size));
-        if (allocatedSize == 0) {
-            return {
-                .error = PhyAllocError_NoMem,
-                .size = 0
-            };
-        }
-        uint64_t allocated = brk;
-        brk += allocatedSize;
-        if (brk == regionEnd && brkRegion + 1 != memmap->count) {
-            size_t newRegion = brkRegion + 1;
-            region = regions + newRegion;
-            regionStart = AlignUp<std::size_t>(region->begin, BasicPageSize);
-            if (regionStart <= UINTPTR_MAX) {
-                brkRegion = newRegion;
-                brk = regionStart;
-            }
-        }
-        return {
-            .start = allocated,
-            .size = allocatedSize
-        };
-    }
-
-    void Free(PhysicalRange range, void* tempPage)
-    {
-        using MM = MemoryMapper;
-        if (range.size == 0) {
+        r.begin = reset_bits(r.begin, PageMask);
+        r.end = align(r.end, PageSize);
+        if (r.end == 0) {
             return;
         }
-        MM::MapPageUnsafe(tempPage, MM::FlagsAllAccess, range.start);
-        auto last = range.start;
-        range.start = lastFree;
-        new(tempPage) PhysicalRange{range};
-        lastFree = last;
-        MM::RemapPageUnsafe(tempPage);
+        r.end = kernel::Max(r.begin, r.end);
     }
 private:
-    auto AllocFromStack(std::size_t size, void* tempPage) -> PhysicalRange
+    auto AcquireIdealMatch(free_range* node) -> mem_range
     {
-        using MM = MemoryMapper;
-        MM::MapPageUnsafe(tempPage, MM::FlagsAllAccess, lastFree);
-        auto rgInf = As<PhysicalRange*>(tempPage);
-        auto next = rgInf->start;
-        PhysicalRange range = {
-            .start = lastFree,
-            .size = rgInf->size
-        };
-        lastFree = next;
-        rgInf->~PhysicalRange();
-        MM::RemapPageUnsafe(tempPage);
-        if (size < range.size) {
-            PhysicalRange t = {
-                .start = range.start + size,
-                .size = range.size - size
-            };
-            range.size = size;
-            Free(t, tempPage);
-        }
-        return range;
+        mem_range result = {node->get_address(), node->get_address() + node->get_size()};
+        Erase(*node);
+        memPool.free(node);
+        return result;
     }
 
-    const kernel_MemoryMap* memmap;
-    uint64_t brk;
-    std::size_t brkRegion;
-    uint64_t lastFree;
-};
+    void AddMemoryRegion(mem_range& r)
+    {
+        if (memPool.empty()) [[unlikely]] {
+            if (!Mapper::MapWithAlloc(r.begin, PageSize, &pageAlloc, &pageAlloc)) {
+                std::terminate();
+            }
+            memPool.add_storage(kernel::ptr_cast<void*>(r.begin));
+            r.begin += PageSize;
+            if (r.begin == r.end) {
+                return;
+            }
+        }
+        auto node = memPool.alloc();
+        node->set_address(r.begin);
+        node->set_size(r.end - r.begin);
+        Insert(*node);
+    }
 
-class MemoryManager {
+    void Insert(free_range& node)
+    {
+        addressTree.Insert(node);
+        sizeTree.Insert(node);
+    }
+
+    void Erase(free_range& node)
+    {
+        addressTree.Erase(node);
+        sizeTree.Erase(node);
+    }
+private:
+    enum class by_end : std::uintptr_t {};
+    struct address_comp
+    {
+        bool operator()(const free_range& a, const free_range& b)
+        {
+            return a.get_address() < b.get_address();
+        }
+        bool operator()(const free_range& a, std::uintptr_t b)
+        {
+            return a.get_address() < b;
+        }
+        bool operator()(std::uintptr_t a, const free_range& b)
+        {
+            return a < b.get_address();
+        }
+        bool operator()(const free_range& a, by_end b)
+        {
+            return a.get_address() + a.get_size() < static_cast<std::uintptr_t>(b);
+        }
+        bool operator()(by_end a, const free_range& b)
+        {
+            return static_cast<std::uintptr_t>(a) < b.get_address() + b.get_size();
+        }
+    };
+    struct size_comp
+    {
+        bool operator()(const free_range& a, const free_range& b)
+        {
+            return a.get_size() < b.get_size();
+        }
+        bool operator()(const free_range& a, std::ptrdiff_t b)
+        {
+            return a.get_size() < b;
+        }
+        bool operator()(std::ptrdiff_t a, const free_range& b)
+        {
+            return a < b.get_size();
+        }
+    };
+
 public:
-    static MemoryManager& Instance();
-    VirtualRange Alloc(void* vAddr, size_t size, int flags, uint64_t pArgs);
-    void Free(void* vAddr, size_t size, enum FlagsGeneric flags);
+    SinglePagePMM pageAlloc;
 private:
-    friend int ::kernel_InitAllocator();
-    static MemoryManager& Init();
-    MemoryManager(const kernel_LdrData* data, void* tempPage);
-
-    static std::byte storage[];
-
-    VMMFreeList kernelFreeRegions;
-    LinearPMM lPMM;
+    chunked_mem_pool<free_range, PageSize> memPool;
+    using address_tree_t = kernel::intrusive::AVLTree<free_range, address_comp, kernel::intrusive::BaseClassCastPolicy<address_node, free_range>>;
+    using size_tree_t = kernel::intrusive::AVLTree<free_range, size_comp, kernel::intrusive::BaseClassCastPolicy<size_node, free_range>>;
+    address_tree_t addressTree;
+    size_tree_t sizeTree;
 };
 
-alignas(MemoryManager) std::byte MemoryManager::storage[sizeof(MemoryManager)];
-
-MemoryManager& MemoryManager::Instance()
+auto AllocInstance() -> VMM&
 {
-    return *As<MemoryManager*>(storage);
+    static VMM alloc;
+    return alloc;
 }
 
-MemoryManager& MemoryManager::Init()
+} // namespace
+
+extern "C" int kernel_InitAllocator()
 {
-    return *new(storage) MemoryManager(kernel_LoaderData, __miniheap);
+    Mapper::Init();
+    auto& alloc = AllocInstance();
+    auto begin = ptr_cast<std::uintptr_t>(__smheap_start);
+    auto end = ptr_cast<std::uintptr_t>(__smheap_end);
+    alloc.ReleaseRange({begin, end});
+    alloc.ReleaseRange({-(std::uintptr_t)0x7FF000000000, -(std::uintptr_t)0x80000000});
+    return 0;
 }
 
-MemoryManager::MemoryManager(const kernel_LdrData* data, void* tempPage) :
-    kernelFreeRegions(tempPage),
-    lPMM(data)
-{}
-
-KERNEL_STRUCT(LinearMM) {
-    PageMM base;
-    const kernel_MemoryMap* memmap;
-    uint64_t pBrk;
-    size_t pBrkRegion;
-    uintptr_t vStart;
-    uintptr_t vEnd;
-};
-
-KERNEL_STRUCT(LinearPhyAllocator) {
-    const kernel_MemoryMap* memmap;
-    uint64_t brk;
-    size_t brkRegion;
-};
-
-KERNEL_STRUCT(LinearAllocator) {
-    LinearPhyAllocator* phyAlloc;
-    uintptr_t start;
-    uintptr_t end;
-};
-
-static PhysicalRange AllocatePhyMemLinear(LinearPhyAllocator* alloc, size_t size);
-
-static LinearPhyAllocator* linearPhyAllocator = NULL;
-
-int kernel_InitAllocator()
+extern "C" void* malloc(size_t size)
 {
-}
-
-PhysicalRange AllocatePhyMemLinear(LinearPhyAllocator* alloc, size_t size)
-{
-    if (size == 0) {
-        return {
-            .error = PhyAllocError_SuccessEmpty,
-            .size = 0
-        };
-    }
-    size = (size + BasicPageMask) & (~(size_t)BasicPageMask);
-    using Entry = const kernel_MemoryMapEntry*;
-    auto regions = ptr_cast<Entry>((uintptr_t)alloc->memmap->entries);
-    auto region = ptr_cast<Entry>(regions + alloc->brkRegion);
-    uint64_t regionStart = region->begin;
-    uint64_t regionEnd = regionStart + region->size;
-    regionStart = (regionStart + BasicPageMask) & (~(uint64_t)BasicPageMask);
-    if (regionStart > UINTPTR_MAX) {
-        return {
-            .error = PhyAllocError_OutOfAddressSpace,
-            .size = 0
-        };
-    }
-    regionEnd = (uintptr_t)(regionEnd & (~(uint64_t)BasicPageMask));
-    size_t allocatedSize = kernel_MinU64(regionEnd - alloc->brk, size);
-    if (allocatedSize == 0) {
-        return {
-            .error = PhyAllocError_NoMem,
-            .size = 0
-        };
-    }
-    uint64_t allocated = alloc->brk;
-    alloc->brk += allocatedSize;
-    if (alloc->brk == regionEnd && alloc->brkRegion + 1 != alloc->memmap->count) {
-        size_t newRegion = alloc->brkRegion + 1;
-        region = regions + newRegion;
-        regionStart = (region->begin + BasicPageMask) & (~(uint64_t)BasicPageMask);
-        if (regionStart <= UINTPTR_MAX) {
-            alloc->brkRegion = newRegion;
-            alloc->brk = regionStart;
-        }
-    }
-    return {
-        .start = allocated,
-        .size = allocatedSize
-    };
-}
-
-static VirtualRange ReserveVirtualMemLinear(LinearAllocator *alloc, size_t size) {
-    if (size == 0) {
-        return { 0 };
-    }
-    size = (size + BasicPageMask) & (~(size_t)BasicPageMask);
-    if (alloc->start == alloc->end || alloc->end - alloc->start < size) {
-        return { {0} };
-    }
-    VirtualRange result = { { (void*)alloc->start }, size };
-    alloc->start += size;
-    return result;
-}
-
-static VirtualRange AllocVirtualMemLinear(LinearAllocator *alloc, void* page, size_t size)
-{
-    uintptr_t oldStart = alloc->start;
-    uint64_t oldBrk = alloc->phyAlloc->brk;
-    size_t oldBrkRegion = alloc->phyAlloc->brkRegion;
-    if (page == NULL) {
-        if (size == 0) {
-            return { {0}, 0 };
-        }
-        VirtualRange range = ReserveVirtualMemLinear(alloc, size);
-        if (range.size == 0) {
-            return { {0}, 0 };
-        }
-        page = range.start;
-        size = range.size;
-    }
-    uintptr_t begin = (uintptr_t)page;
-    uintptr_t end = begin + size;
-    begin = begin & ~(uintptr_t)BasicPageMask;
-    end = (end + BasicPageMask) & ~(uintptr_t)BasicPageMask;
-    for (uintptr_t cur = begin; cur < end; cur += BasicPageSize) {
-        void* result = MapKernelPage(kernelPageTable, (void*)cur, 0, 0);
-        if (result) {
-            continue;
-        }
-        for(; cur != begin; cur -= BasicPageSize) {
-            // TODO: UnmapKernelPage((void*)(cur - BasicPageSize));
-        }
-        alloc->start = oldStart;
-        alloc->phyAlloc->brk = oldBrk;
-        alloc->phyAlloc->brkRegion = oldBrkRegion;
-        return { {0}, 0 };
-    }
-    return { { (void*)begin }, (size_t)(end - begin) };
-}
-
-using ;
-
-struct RegionHeader {
-    std::size_t type:2;
-    std::size_t balance:2;
-    std::size_t isLast:1;
-    std::size_t size:16;
-    std::size_t prev:43;
-};
-
-struct FreeHeader {
-    RegionHeader header;
-    FreeHeader* parent;
-    FreeHeader* children[2];
-};
-
-struct BigAllocHeader {
-    RegionHeader header;
-    std::size_t allocOffset;
-};
-
-template <>
-struct AllocatorRegionTraits<RegionHeader> {
-    enum : std::size_t {
-        ChunkLogGranularity = 4,
-        ChunkLogTreshold = 17,
-        ChunkLogSize = 19,
-        SizeFieldSize = ChunkLogSize - ChunkLogGranularity + 1,
-        ChunkGranularity = std::size_t(1) << ChunkLogGranularity,
-        ChunkTreshold = std::size_t(1) << ChunkLogTreshold,
-        ChunkSize = std::size_t(1) << ChunkLogSize,
-    };
-
-    using FreeHeader = FreeHeader;
-private:
-    static auto Construct(void* ptr, RegionType type) -> RegionHeader*
-    {
-        switch (type) {
-        case RegionType::SmallFree:
-        case RegionType::Allocated:
-            return new(ptr) RegionHeader;
-        case RegionType::BigAllocated:
-            return ptr_cast<RegionHeader*>(new(ptr) BigAllocHeader);
-        case RegionType::Free:
-            return ptr_cast<RegionHeader*>(new(ptr) FreeHeader);
-        }
-    }
-
-    static auto Destroy(RegionHeader* region) -> void*
-    {
-        switch (GetType(region)) {
-            case Allocated:
-            case SmallFree:
-                region->~RegionHeader();
-                return region;
-            case BigAllocated: {
-                auto rgn = ptr_cast<BigAllocHeader*>(region);
-                rgn->~BigAllocHeader();
-                return rgn;
-            }
-            case Free: {
-                auto rgn = ptr_cast<FreeHeader*>(region);
-                rgn->~FreeHeader();
-                return rgn;
-            }
-        }
+    constexpr auto HeaderReserve = alignof(max_align_t);
+    static_assert(sizeof(std::uintptr_t) <= HeaderReserve);
+    auto& alloc = AllocInstance();
+    size += HeaderReserve;
+    auto range = alloc.AcquireRange(size);
+    if (range.begin == range.end) [[unlikely]] {
         return nullptr;
     }
-
-    static auto ConstructChunk(
-        void* ptr,
-        std::size_t size,
-        std::size_t offset
-    ) -> RegionHeader*
-    {
-        auto rgn = ptr_cast<BigAllocHeader*>(Construct(ptr, RegionType::BigAllocated));
-        rgn->allocOffset = offset;
-        rgn->header.type = RegionType::BigAllocated;
-        rgn->header.isLast = true;
-        rgn->header.size = size / ChunkGranularity;
-        rgn->header.prev = (size / ChunkGranularity) >> SizeFieldSize;
-        return ptr_cast<RegionHeader*>(rgn);
+    if (!Mapper::MapWithAlloc(range.begin, range.end - range.begin, &alloc.pageAlloc, &alloc.pageAlloc)) [[unlikely]] {
+        return nullptr;
     }
-public:
-    static auto AllocateChunk(std::size_t size, std::size_t align) -> RegionHeader*
-    {
-        auto ptr = VirtualAlloc(nullptr, size + align - ChunkGranularity,
-            MEM_RESERVE, PAGE_READWRITE);
-        if (ptr == nullptr) {
-            return nullptr;
-        }
-        auto offset = ptr_cast<std::uintptr_t>(ptr) & (align - 1);
-        auto allocStartOffset = align - offset - ChunkGranularity;
-        auto bptr = ptr_cast<unsigned char*>(ptr) + allocStartOffset;
-        VirtualAlloc(bptr, size, MEM_COMMIT, PAGE_READWRITE);
-        RegionHeader* rgn = ConstructChunk(bptr, size, allocStartOffset);
-        return rgn;
-    }
-
-    static auto AllocateIdentity(void* ptr) -> RegionHeader*
-    {
-        return ConstructChunk(ptr, ChunkSize, 0);
-    }
-
-    static void DeallocateChunk(RegionHeader* rgn)
-    {
-        std::size_t offset = 0;
-        if (GetType(rgn) == RegionType::BigAllocated) {
-            offset = GetAllocOffset(rgn);
-        }
-        auto ptr = ptr_cast<unsigned char*>(Destroy(rgn)) - offset;
-        auto r = VirtualFree(ptr, 0, MEM_RELEASE);
-        if (r == FALSE) {
-            auto error = GetLastError();
-            std::stringstream strstr;
-            strstr << "error!" << error;
-            throw std::runtime_error(strstr.str());
-        }
-    }
-
-    static auto Retype(RegionHeader* region, RegionType type) -> RegionHeader*
-    {
-        RegionHeader old = *region;
-        auto ptr = ptr_cast<unsigned char*>(region);
-        Destroy(region);
-        region = Construct(ptr, type);
-        *region = old;
-        region->type = type;
-        return region;
-    }
-
-    static auto Split(RegionHeader* region, std::size_t firstSize) -> RegionHeader*
-    {
-        auto ptr = ptr_cast<unsigned char*>(region);
-        auto size = GetSize(region);
-        auto secondSize = size - firstSize;
-        if (firstSize < sizeof(FreeHeader)) {
-            region = Retype(region, RegionType::SmallFree);
-        }
-        region->size = firstSize / ChunkGranularity;
-        auto secondType = secondSize < sizeof(FreeHeader) ?
-            RegionType::SmallFree : RegionType::Free;
-        auto second = Construct(ptr + firstSize, secondType);
-        second->size = secondSize / ChunkGranularity;
-        second->prev = region->size;
-        second->isLast = region->isLast;
-        region->isLast = false;
-        if (!second->isLast) {
-            GetNext(second)->prev = second->size;
-        }
-        return region;
-    }
-
-    static auto MergeWithNext(RegionHeader* region) -> RegionHeader*
-    {
-        auto next = GetNext(region);
-        region->size += next->size;
-        region->isLast = next->isLast;
-        Destroy(next);
-        if (GetSize(region) >= sizeof(FreeHeader)) {
-            region = Retype(region, RegionType::Free);
-        }
-        if (!region->isLast) {
-            GetNext(region)->prev = region->size;
-        }
-        return region;
-    }
-
-    static int GetType(RegionHeader* header)
-    {
-        return header->type;
-    }
-
-    static auto GetSize(RegionHeader* header) -> std::size_t
-    {
-        return header->size * ChunkGranularity;
-    }
-
-    static auto GetSizeBig(RegionHeader* header) -> std::size_t
-    {
-        return (header->size | (header->prev << SizeFieldSize)) * ChunkGranularity;
-    }
-
-    static auto GetAllocOffset(RegionHeader* header) -> std::size_t
-    {
-        auto bheader = ptr_cast<BigAllocHeader*>(header);
-        return bheader->allocOffset;
-    }
-
-    static auto GetNext(RegionHeader* header) -> RegionHeader*
-    {
-        if (header->isLast) {
-            return header;
-        }
-        auto offset = GetSize(header);
-        return ApplyOffset<RegionHeader>(header, std::ptrdiff_t(offset));
-    }
-
-    static auto GetPrevSize(RegionHeader* header) -> std::size_t
-    {
-        return header->prev * ChunkGranularity;
-    }
-
-    static auto GetPrev(RegionHeader* header) -> RegionHeader*
-    {
-        auto offset = GetPrevSize(header);
-        return ApplyOffset<RegionHeader>(header, -std::ptrdiff_t(offset));
-    }
-
-    static auto AsFreeHeader(RegionHeader* header) -> FreeHeader*
-    {
-        return ptr_cast<FreeHeader*>(header);
-    }
-
-    static auto FromFreeHeader(FreeHeader* header) -> RegionHeader*
-    {
-        return ptr_cast<RegionHeader*>(header);
-    }
-};
-
-template <>
-struct container_test::intrusive::AVLTreeNodeTraits<FreeHeader> {
-    using Tr = AllocatorRegionTraits<RegionHeader>;
-
-    static int GetBalance(FreeHeader& header)
-    {
-        return int(header.header.balance) - 2;
-    }
-
-    static void SetBalance(FreeHeader& header, int balance)
-    {
-        header.header.balance = std::size_t(balance) + 2;
-    }
-
-    static auto GetParent(FreeHeader& header) -> FreeHeader*
-    {
-        return header.parent;
-    }
-
-    static void SetParent(FreeHeader& header, FreeHeader* parent)
-    {
-        header.parent = parent;
-    }
-
-    static auto GetChild(FreeHeader& header, bool right) -> FreeHeader*
-    {
-        return header.children[right];
-    }
-
-    static auto SetChild(FreeHeader& header, bool right, FreeHeader* child)
-    {
-        header.children[right] = child;
-    }
-};
-
-Allocator<RegionHeader> myAllocator;
-
-extern "C" {
-
-void* malloc(size_t size)
-{
-    (void)size;
-    return NULL;
+    auto ptr = ptr_cast<unsigned char*>(range.begin);
+    new(ptr) std::uintptr_t(range.end);
+    return ptr + HeaderReserve;
 }
 
-void free(void* ptr)
+extern "C" void* realloc(void* p, size_t newSize)
 {
-    (void)ptr;
+    constexpr auto HeaderReserve = alignof(max_align_t);
+    auto ptr = ptr_cast<unsigned char*>(p) - HeaderReserve;
+    VMM::mem_range range{ptr_cast<std::uintptr_t>(ptr), *kernel::As<std::uintptr_t*>(ptr)};
+    auto oldSize = range.end - range.begin - HeaderReserve;
+    auto newPtr = malloc(newSize);
+    memcpy(newPtr, p, kernel::Min(oldSize, newSize));
+    free(p);
+    return newPtr;
 }
 
-void* realloc(void* ptr, size_t size)
+extern "C" void free(void* p)
 {
-    (void)ptr;
-    (void)size;
-    return NULL;
-}
-
+    constexpr auto HeaderReserve = alignof(max_align_t);
+    auto ptr = ptr_cast<unsigned char*>(p) - HeaderReserve;
+    VMM::mem_range range{ptr_cast<std::uintptr_t>(ptr), *kernel::As<std::uintptr_t*>(ptr)};
+    auto& alloc = AllocInstance();
+    Mapper::UnmapWithAlloc(range.begin, range.end - range.begin, &alloc.pageAlloc, &alloc.pageAlloc);
+    alloc.ReleaseRange(range);
 }

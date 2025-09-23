@@ -21,13 +21,13 @@ public:
     public:
         Iterator& operator++() noexcept
         {
-            ptr = NodeTraits::GetNext(ptr);
+            ptr = NodeTraits::GetNext(*ptr);
             return *this;
         }
 
         Iterator& operator--() noexcept
         {
-            ptr = NodeTraits::GetPrev(ptr);
+            ptr = NodeTraits::GetPrev(*ptr);
             return *this;
         }
 
@@ -75,8 +75,8 @@ public:
     {
         using Tr = NodeTraits;
         NodeType* elem = it.ptr;
-        NodeType* prev = Tr::GetPrev(elem);
-        NodeType* next = Tr::GetNext(elem);
+        NodeType* prev = Tr::GetPrev(*elem);
+        NodeType* next = Tr::GetNext(*elem);
         Tr::SetNext(*prev, next);
         Tr::SetPrev(*next, prev);
     }
@@ -126,7 +126,7 @@ public:
 
     bool Empty() noexcept
     {
-        return (Begin() != End());
+        return (Begin() == End());
     }
 
     void Clear() noexcept

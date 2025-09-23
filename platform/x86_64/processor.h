@@ -127,17 +127,22 @@ constexpr inline i686_PageEntry i686_MakePageEntry(uint32_t phyPage, uint32_t fl
 #endif
 
 typedef enum x86_64_PageEntryFlag {
-    x86_64_PageEntryFlag_ExecDisable = 1 << 0,
-    x86_64_PageEntryFlag_Present = 1 << 1,
-    x86_64_PageEntryFlag_Write = 1 << 2,
-    x86_64_PageEntryFlag_User = 1 << 3,
-    x86_64_PageEntryFlag_PWT = 1 << 4, // Cache write through
-    x86_64_PageEntryFlag_PCD = 1 << 5, // Disable cache
-    x86_64_PageEntryFlag_Accessed = 1 << 6,
-    x86_64_PageEntryFlag_Dirty = 1 << 7,
-    x86_64_PageEntryFlag_PAT = 1 << 8,
-    x86_64_PageEntryFlag_Global = 1 << 9,
+    x86_64_PageEntryFlag_Present = 1,
+    x86_64_PageEntryFlag_Write = 2,
+    x86_64_PageEntryFlag_User = 4,
+    x86_64_PageEntryFlag_PWT = 8, // Cache write through
+    x86_64_PageEntryFlag_PCD = 16, // Disable cache
+    x86_64_PageEntryFlag_Accessed = 32,
+    x86_64_PageEntryFlag_Dirty = 64,
+    x86_64_PageEntryFlag_PAT = 128,
+    x86_64_PageEntryFlag_Global = 256,
+#ifdef __cplusplus
+    x86_64_PageEntryFlag_ExecDisable = 0x8000000000000000U
+#endif
 } x86_64_PageEntryFlag;
+#ifndef __cplusplus
+#define x86_64_PageEntryFlag_ExecDisable (0x8000000000000000U)
+#endif
 
 typedef struct x86_64_PageEntry {
     alignas(8) uint64_t data;
@@ -145,7 +150,7 @@ typedef struct x86_64_PageEntry {
 
 #define x86_64_internal_MakePageEntry(phyPage, flags, pk) { \
     ((phyPage) & 0x07FFFFFFFFFFF000U) | \
-    ((((uint64_t)(flags) >> 1) | ((uint64_t)(flags) << 63)) & 0x8000000000000FFF) | \
+    (flags & 0x8000000000000FFF) | \
     ((uint64_t)(pk) & 0xF) << 59 }
 
 #ifndef __cplusplus
@@ -165,7 +170,7 @@ inline uint64_t x86_64_PageEntry_GetAddr(x86_64_PageEntry entry)
 
 inline int x86_64_PageEntry_GetFlags(x86_64_PageEntry entry)
 {
-    return (((entry.data) << 1) | (entry.data >> 63)) & 0x1FFFU;
+    return entry.data & 0x8000000000000FFFU;
 }
 
 inline int x86_64_PageEntry_GetProtectionKey(x86_64_PageEntry entry)

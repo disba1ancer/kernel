@@ -35,16 +35,17 @@ SECTIONS {
         __bss_start = .;
         *(COMMON)
         *(.bss*)
-        . = ALIGN(CONSTANT(MAXPAGESIZE));
         __bss_end = .;
-        __miniheap = .;
-        . += CONSTANT(MAXPAGESIZE);
     }
-    . = ALIGN(-64K, CONSTANT(MAXPAGESIZE));
+    . = ALIGN(CONSTANT(MAXPAGESIZE));
+    __smheap_start = .;
+    __stack_size = 64K;
+    . = -__stack_size;
+    __smheap_end = .;
     .stack : {
         __init_stack_start = .;
-        . = -CONSTANT(MAXPAGESIZE);
+        . += __stack_size - CONSTANT(MAXPAGESIZE);
         __init_stack_end = .;
     }
-    __mapping_window_entry = .;
+    __mapping_window = .;
 }

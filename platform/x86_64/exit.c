@@ -3,7 +3,7 @@
 #include <stdlib.h>
 
 typedef void cxa_atexit_func(void*);
-_Noreturn void kernel_EndlessLoop();
+_Noreturn void kernel_EndlessLoop(void);
 
 KERNEL_STRUCT(cxa_atexit_entry) {
     cxa_atexit_func* func;
@@ -110,7 +110,7 @@ _Noreturn void _Exit(int exit_code)
     kernel_EndlessLoop();
 }
 
-_Noreturn void abort()
+_Noreturn void abort(void)
 {
     _Exit(1);
 }
