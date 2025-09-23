@@ -1,4 +1,4 @@
-add_library(kstd STATIC
+add_library(kstd OBJECT
     include/cstdlib
     include/cstring
     include/kstd/btstdbeg.h

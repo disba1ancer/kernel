@@ -1,4 +1,4 @@
-add_library(generic STATIC
+add_library(generic OBJECT
     include/kernel/UniquePtr.hpp
     include/kernel/allocator.hpp
     include/kernel/avl_tree.hpp
@@ -13,5 +13,5 @@ add_library(generic STATIC
     util.cpp
 )
 
-target_link_libraries(generic PRIVATE kstd)
+target_link_libraries(generic PUBLIC kstd)
 target_include_directories(generic PUBLIC include)
