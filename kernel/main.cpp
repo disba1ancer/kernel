@@ -8,6 +8,7 @@ int kmain()
     //cout << "Hello World!" << endl;
     void* mem = std::malloc(0xA00000);
     std::memset(mem, 0x55, 0xA00000);
+    std::free(mem);
     while (1) {
         asm volatile ("hlt");
     }

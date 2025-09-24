@@ -103,7 +103,7 @@ auto FindBoundaryEntry(
 
 auto CanonizeAddr(std::uintptr_t addr) -> std::uintptr_t
 {
-    return addr | ((addr >= 0x800000000000) * 0xFFFF800000000000);
+    return ((addr & 0xFFFFFFFFFFFF) ^ 0x800000000000) - 0x800000000000;
 }
 
 struct ISinglePageAlloc {
@@ -195,10 +195,10 @@ struct Mapper
         for (auto i = begin; i != end; ++i) {
             auto &t = Table(i);
             if (t.data & x86_64_PageEntryFlag_Present) {
-                return false;
+                return true;
             }
         }
-        return true;
+        return false;
     }
     struct Args {
         ISinglePageAlloc* alloc;
@@ -236,10 +236,9 @@ struct Mapper
     {
         auto levelID = 0400000000000U;
         for (int i = 2; i != 0; --i) {
-            levelID |= levelID >> 9;
             args->begin = (args->begin >> 9) | levelID;
-            args->end = args->end - 1 + (1 << (i * 9));
             args->end = (args->end >> 9) | levelID;
+            levelID |= levelID >> 9;
             if (args->end <= args->begin) {
                 return;
             }
