@@ -1,4 +1,3 @@
-#include "kernel/UniquePtr.hpp"
 #include "kernel/allocator.hpp"
 #include "kernel/avl_tree.hpp"
 #include "kernel/avl_tree_node.hpp"

@@ -6,10 +6,10 @@
  * Unmap - unmap physical memory from specified virtual memory, frees physical RAM if it was mapped
  *
  * enum FlagsGeneric {
- * Reserve,
- * Read,
+ * Present,
  * Write,
- * Execute
+ * Execute,
+ * System
  * };
  *
  * enum FlagsArch {
@@ -40,11 +40,12 @@
 #include <new>
 #include "kernel/bootdata.h"
 #include "kernel/util.hpp"
-#include "kernel/util.h"
 #include "kernel/avl_tree.hpp"
 #include "kernel/list.hpp"
 #include "processor.h"
 #include <cstring>
+#include <algorithm>
+#include <memory>
 
 using kernel::ptr_cast;
 
@@ -401,7 +402,7 @@ struct SinglePagePMM : ISinglePageAlloc
 template <typename T, typename ... TT>
 struct max_size
 {
-    static constexpr auto value = kernel::Max(sizeof(T), max_size<TT...>::value);
+    static constexpr auto value = std::max(sizeof(T), max_size<TT...>::value);
 };
 
 template <typename ... T>
@@ -535,19 +536,19 @@ struct free_range_comparator
 {
     bool operator()(const free_range& a, const free_range& b) const
     {
-        auto av = reinterpret_cast<std::uintptr_t>(kernel::AddressOf(a));
-        auto bv = reinterpret_cast<std::uintptr_t>(kernel::AddressOf(b));
+        auto av = reinterpret_cast<std::uintptr_t>(std::addressof(a));
+        auto bv = reinterpret_cast<std::uintptr_t>(std::addressof(b));
         return av < bv;
     }
     bool operator()(void* const& a, const free_range& b) const
     {
         auto av = reinterpret_cast<std::uintptr_t>(a);
-        auto bv = reinterpret_cast<std::uintptr_t>(kernel::AddressOf(b));
+        auto bv = reinterpret_cast<std::uintptr_t>(std::addressof(b));
         return av < bv;
     }
     bool operator()(const free_range& a, void* const& b) const
     {
-        auto av = reinterpret_cast<std::uintptr_t>(kernel::AddressOf(a));
+        auto av = reinterpret_cast<std::uintptr_t>(std::addressof(a));
         auto bv = reinterpret_cast<std::uintptr_t>(b);
         return av < bv;
     }
@@ -621,8 +622,8 @@ struct chunked_mem_pool
     struct free_obj : list_node {};
     using list = kernel::intrusive::List<free_obj>;
 
-    static constexpr auto max_align = kernel::Max(alignof(T), alignof(free_obj));
-    static constexpr auto max_size = kernel::Max(sizeof(T), sizeof(free_obj));
+    static constexpr auto max_align = std::max(alignof(T), alignof(free_obj));
+    static constexpr auto max_size = std::max(sizeof(T), sizeof(free_obj));
     static constexpr auto obj_size = align(max_size, max_align);
     static constexpr auto objs_per_storage = ptrdiff_t(storageSize / obj_size);
 
@@ -742,7 +743,7 @@ struct VMM
         if (r.end == 0) {
             return;
         }
-        r.end = kernel::Max(r.begin, r.end);
+        r.end = std::max(r.begin, r.end);
     }
 private:
     auto AcquireIdealMatch(free_range* node) -> mem_range
@@ -877,7 +878,7 @@ extern "C" void* realloc(void* p, size_t newSize)
     VMM::mem_range range{ptr_cast<std::uintptr_t>(ptr), *kernel::As<std::uintptr_t*>(ptr)};
     auto oldSize = range.end - range.begin - HeaderReserve;
     auto newPtr = malloc(newSize);
-    memcpy(newPtr, p, kernel::Min(oldSize, newSize));
+    memcpy(newPtr, p, std::min(oldSize, newSize));
     free(p);
     return newPtr;
 }

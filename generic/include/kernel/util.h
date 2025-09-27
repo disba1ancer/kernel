@@ -82,15 +82,14 @@ inline int kernel_Log2U32(uint32_t val)
     inline t kernel_Min ## s(t a, t b)\
     { return (a < b) ? a : b; }\
     inline t kernel_Max ## s(t a, t b)\
-    { return (a > b) ? a : b; }\
-    inline unsigned t kernel_MinU ## s(unsigned t a, unsigned t b)\
-    { return (a < b) ? a : b; }\
-    inline unsigned t kernel_MaxU ## s(unsigned t a, unsigned t b)\
     { return (a > b) ? a : b; }
 
 TMINMAX(, int)
 TMINMAX(L, long)
 TMINMAX(LL, long long)
+TMINMAX(U, unsigned int)
+TMINMAX(UL, unsigned long)
+TMINMAX(ULL, unsigned long long)
 
 #undef TMINMAX
 
@@ -154,36 +153,6 @@ size_t kernel_UToStr(char* str, size_t size, unsigned num, int radix);
 namespace kernel {
 
 #define NS_FUNC(prefix, name) inline constexpr auto& name = :: prefix ## name;
-
-NS_FUNC(kernel_, DoublyLinkedList_Add)
-NS_FUNC(kernel_, DoublyLinkedList_Remove)
-
-template <typename A, typename B>
-requires (requires(A a, B b) { { a < b } -> std::convertible_to<bool>; })
-constexpr auto Min(const A& a, const B& b) -> decltype(a + b) {
-    using T = decltype(a + b);
-    return (T(a) < T(b)) ? a : b;
-}
-
-template <typename A, typename B>
-requires (requires(A a, B b) { { a > b } -> std::convertible_to<bool>; } )
-constexpr auto Max(const A& a, const B& b) -> decltype(a + b) {
-    using T = decltype(a + b);
-    return (T(a) > T(b)) ? a : b;
-}
-
-#define TMINMAX(bits)\
-    NS_FUNC(kernel_, MinU##bits)\
-    NS_FUNC(kernel_, MaxU##bits)\
-    NS_FUNC(kernel_, MinS##bits)\
-    NS_FUNC(kernel_, MaxS##bits)
-
-TMINMAX(8)
-TMINMAX(16)
-TMINMAX(32)
-TMINMAX(64)
-
-#undef TMINMAX
 
 NS_FUNC(kernel_, ULLToStr)
 NS_FUNC(kernel_, ULToStr)

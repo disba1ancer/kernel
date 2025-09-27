@@ -3,6 +3,7 @@
 
 #include "node.hpp"
 #include "list_node.hpp"
+#include <memory>
 
 namespace kernel::intrusive {
 
@@ -58,10 +59,10 @@ public:
     }
 
     Iterator Insert(Iterator it, T& ref)
-        noexcept(noexcept(CastPolicy::ToNode(AddressOf(ref))))
+        noexcept(noexcept(CastPolicy::ToNode(std::addressof(ref))))
     {
         using Tr = NodeTraits;
-        NodeType* elem = CastPolicy::ToNode(AddressOf(ref));
+        NodeType* elem = CastPolicy::ToNode(std::addressof(ref));
         NodeType* next = it.ptr;
         NodeType* prev = Tr::GetPrev(*next);
         Tr::SetPrev(*elem, prev);
@@ -94,7 +95,7 @@ public:
 
     Iterator End() noexcept
     {
-        return { AddressOf(sentinel) };
+        return { std::addressof(sentinel) };
     }
 
     friend Iterator begin(List& list) noexcept
@@ -118,10 +119,10 @@ public:
     }
 
     auto IteratorTo(T& elem)
-        noexcept(noexcept(CastPolicy::ToNode(AddressOf(elem))))
+        noexcept(noexcept(CastPolicy::ToNode(std::addressof(elem))))
         -> Iterator
     {
-        return CastPolicy::ToNode(AddressOf(elem));
+        return CastPolicy::ToNode(std::addressof(elem));
     }
 
     bool Empty() noexcept
@@ -132,8 +133,8 @@ public:
     void Clear() noexcept
     {
         using Tr = NodeTraits;
-        Tr::SetPrev(sentinel, AddressOf(sentinel));
-        Tr::SetNext(sentinel, AddressOf(sentinel));
+        Tr::SetPrev(sentinel, std::addressof(sentinel));
+        Tr::SetNext(sentinel, std::addressof(sentinel));
     }
 private:
     void DoMove(List& oth) noexcept {
@@ -143,8 +144,8 @@ private:
         }
         using Tr = NodeTraits;
         sentinel = oth.sentinel;
-        Tr::SetPrev(*(Begin().ptr), AddressOf(sentinel));
-        Tr::SetNext(*((--End()).ptr), AddressOf(sentinel));
+        Tr::SetPrev(*(Begin().ptr), std::addressof(sentinel));
+        Tr::SetNext(*((--End()).ptr), std::addressof(sentinel));
     }
 
     NodeType sentinel;

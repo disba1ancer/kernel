@@ -143,7 +143,7 @@ public:
         if (size == 0) {
             return nullptr;
         }
-        align = Max(align, std::size_t(RgTr::ChunkGranularity));
+        align = std::max(align, std::size_t(RgTr::ChunkGranularity));
         size += RgTr::ChunkGranularity - 1;
         size &= size ^ (RgTr::ChunkGranularity - 1);
         if (!IsPOT(align) || size & (align - 1)) {

@@ -5,14 +5,9 @@
 #include <concepts>
 #include <cstdint>
 #include <new>
+#include <utility>
 
 namespace kernel {
-
-template <typename T>
-std::remove_reference_t<T>&& Move(T&& in)
-{
-    return static_cast<std::remove_reference_t<T>&&>(in);
-}
 
 template <class T>
 struct ReplaceByVoid {
@@ -72,24 +67,12 @@ D As(S* ptr)
     return std::launder(ptr_cast<D>(ptr));
 }
 
-template <typename T, std::size_t N>
-constexpr std::size_t Size(T(&)[N])
-{
-    return N;
-}
-
-template <typename T>
-constexpr T* AddressOf(T& ref)
-{
-    return __builtin_addressof(ref);
-}
-
 template <typename T>
 class ScopeExit {
 	T final;
 public:
 	ScopeExit(const T& onFinal) : final(onFinal) {}
-	ScopeExit(T&& onFinal) : final(Move(onFinal)) {}
+	ScopeExit(T&& onFinal) : final(std::move(onFinal)) {}
 	~ScopeExit() noexcept(false) { final(); }
 };
 

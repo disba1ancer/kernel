@@ -5,6 +5,7 @@
 #include "node.hpp"
 #include "avl_tree_node.hpp"
 #include <cstdlib>
+#include <memory>
 
 namespace kernel::intrusive {
 
@@ -33,8 +34,8 @@ public:
     {
         using Tr = NodeTraits;
         Tr::SetParent(sentinel, nullptr);
-        Tr::SetChild(sentinel, 0, AddressOf(sentinel));
-        Tr::SetChild(sentinel, 1, AddressOf(sentinel));
+        Tr::SetChild(sentinel, 0, std::addressof(sentinel));
+        Tr::SetChild(sentinel, 1, std::addressof(sentinel));
     }
 
     class Iterator : public detail::BasicIterator<Iterator, T> {
@@ -83,11 +84,11 @@ public:
     {
         using Tr = NodeTraits;
         auto first = oth.begin().current;
-        Tr::SetChild(*first, 0, AddressOf(sentinel));
+        Tr::SetChild(*first, 0, std::addressof(sentinel));
         auto last = (--oth.end()).current;
-        Tr::SetChild(*last, 1, AddressOf(sentinel));
+        Tr::SetChild(*last, 1, std::addressof(sentinel));
         auto root = Tr::GetChild(sentinel, 0);
-        Tr::SetParent(*root, AddressOf(sentinel));
+        Tr::SetParent(*root, std::addressof(sentinel));
     }
 
     Iterator Insert(T& elem)
@@ -125,7 +126,7 @@ public:
                 children[b].Parent().Children(a) = children[b];
                 children[b].Children(a) = children[a];
             }
-            if (!a && erasedNode.Children(0) == AddressOf(sentinel)) {
+            if (!a && erasedNode.Children(0) == std::addressof(sentinel)) {
                 Tr::SetChild(sentinel, 1, erasedNode.Children(1));
             }
             RebalanceTreeE(erasedNode.Parent(), c);
@@ -194,7 +195,7 @@ public:
 
     Iterator End()
     {
-        return AddressOf(sentinel);
+        return std::addressof(sentinel);
     }
 
     friend Iterator end(AVLTree& tree)
@@ -210,7 +211,7 @@ public:
     auto IteratorTo(T& elem) -> Iterator
     {
         using cp = CastPolicy;
-        return cp::ToNode(AddressOf(elem));
+        return cp::ToNode(std::addressof(elem));
     }
 
     auto Find(const T& key) -> Iterator {
@@ -228,22 +229,22 @@ public:
         using H = TraitsHelper;
         using cp = CastPolicy;
         auto subtree = H(Tr::GetChild(sentinel, 0));
-        if (subtree == AddressOf(sentinel)) {
-            return AddressOf(sentinel);
+        if (subtree == std::addressof(sentinel)) {
+            return std::addressof(sentinel);
         }
-        NodeType* range[2] = { AddressOf(sentinel), AddressOf(sentinel) };
+        NodeType* range[2] = { std::addressof(sentinel), std::addressof(sentinel) };
         while (true) {
             Comp comp;
             bool a = comp(key, *cp::FromNode(subtree));
             bool b = comp(*cp::FromNode(subtree), key);
             if (a == b) return { subtree };
             if (subtree.Children(b) == range[b]) {
-                return AddressOf(sentinel);
+                return std::addressof(sentinel);
             }
             range[a] = subtree;
             subtree = subtree.Children(b);
         }
-        return AddressOf(sentinel);
+        return std::addressof(sentinel);
     }
 
     template <typename KeyType>
@@ -253,10 +254,10 @@ public:
         using H = TraitsHelper;
         using cp = CastPolicy;
         auto subtree = H(Tr::GetChild(sentinel, 0));
-        if (subtree == AddressOf(sentinel)) {
-            return AddressOf(sentinel);
+        if (subtree == std::addressof(sentinel)) {
+            return std::addressof(sentinel);
         }
-        NodeType* range[2] = { AddressOf(sentinel), AddressOf(sentinel) };
+        NodeType* range[2] = { std::addressof(sentinel), std::addressof(sentinel) };
         while (true) {
             Comp comp;
             bool a = comp(key, *cp::FromNode(subtree));
@@ -266,7 +267,7 @@ public:
             range[a] = subtree;
             subtree = subtree.Children(!a);
         }
-        return AddressOf(sentinel);
+        return std::addressof(sentinel);
     }
 
     template <typename KeyType>
@@ -276,10 +277,10 @@ public:
         using H = TraitsHelper;
         using cp = CastPolicy;
         auto subtree = H(Tr::GetChild(sentinel, 0));
-        if (subtree == AddressOf(sentinel)) {
-            return AddressOf(sentinel);
+        if (subtree == std::addressof(sentinel)) {
+            return std::addressof(sentinel);
         }
-        NodeType* range[2] = { AddressOf(sentinel), AddressOf(sentinel) };
+        NodeType* range[2] = { std::addressof(sentinel), std::addressof(sentinel) };
         while (true) {
             Comp comp;
             bool a = comp(*cp::FromNode(subtree), key);
@@ -289,7 +290,7 @@ public:
             range[!a] = subtree;
             subtree = subtree.Children(a);
         }
-        return AddressOf(sentinel);
+        return std::addressof(sentinel);
     }
 
     bool Empty()
@@ -307,12 +308,12 @@ private:
         if (rightInsert) {
             parentNode = FindNeighbour(parentNode, false);
         }
-        auto node = H(cp::ToNode(AddressOf(elem)));
+        auto node = H(cp::ToNode(std::addressof(elem)));
         node.Balance() = 0;
         node.Parent() = parentNode;
         node.Children(!rightInsert) = parentNode;
         node.Children(rightInsert) = parentNode.Children(rightInsert);
-        if (node.Children(0) == AddressOf(sentinel)) {
+        if (node.Children(0) == std::addressof(sentinel)) {
             Tr::SetChild(sentinel, 1, node);
         } // TODO: sentinel update without branch
         parentNode.Children(rightInsert) = node;
@@ -324,7 +325,7 @@ private:
     {
         using H = TraitsHelper;
         auto from = H(fromArg);
-        while (from != AddressOf(sentinel)) {
+        while (from != std::addressof(sentinel)) {
             int balanceDiff = 1 - 2 * balanceSign;
             from.Balance() = from.Balance() + balanceDiff;
             auto nextNode = H(from.Parent());
@@ -352,7 +353,7 @@ private:
     {
         using H = TraitsHelper;
         auto from = H(fromArg);
-        while (from != AddressOf(sentinel)) {
+        while (from != std::addressof(sentinel)) {
             int balanceDiff = 1 - 2 * balanceSign;
             from.Balance() = from.Balance() + balanceDiff;
             auto nextNode = H(from.Parent());

@@ -3,7 +3,6 @@
 
 #include <concepts>
 #include <new>
-#include "util.hpp"
 
 namespace kernel::intrusive {
 
