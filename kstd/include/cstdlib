@@ -2,7 +2,7 @@
 #define _CSTDLIB
 
 #ifdef __cplusplus
-#define _KSTD_CPPMODE
+#define _KSTD_CPPMODE 1
 
 #ifdef _STDLIB_H
 

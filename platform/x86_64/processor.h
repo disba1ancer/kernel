@@ -156,7 +156,7 @@ typedef struct x86_64_PageEntry {
 #ifndef __cplusplus
 #define x86_64_MakePageEntry(phyPage, flags, pk) x86_64_internal_MakePageEntry(phyPage, flags, pk)
 #else
-constexpr inline x86_64_PageEntry x86_64_MakePageEntry(uint64_t phyPage, int flags, int pk = 0)
+constexpr inline x86_64_PageEntry x86_64_MakePageEntry(uint64_t phyPage, uint64_t flags, int pk = 0)
 {
     return x86_64_internal_MakePageEntry(phyPage, flags, pk);
 }
@@ -168,7 +168,7 @@ inline uint64_t x86_64_PageEntry_GetAddr(x86_64_PageEntry entry)
     return entry.data & 0x07FFFFFFFFFFF000U;
 }
 
-inline int x86_64_PageEntry_GetFlags(x86_64_PageEntry entry)
+inline uint64_t x86_64_PageEntry_GetFlags(x86_64_PageEntry entry)
 {
     return entry.data & 0x8000000000000FFFU;
 }

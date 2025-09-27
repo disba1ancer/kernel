@@ -113,6 +113,13 @@ struct ISinglePageAlloc {
 
 struct Mapper
 {
+    static constexpr auto IndexMask = 0xFFFFFFFFF;
+    static constexpr auto PageTableAddr = -0x800000000000;
+    static constexpr auto BottomLevelMask = 0777;
+    static constexpr auto NonBottomLevelMask = 0777777777000;
+    static constexpr auto PageDirectoriesStartIndex = 0400000000000U;
+    static constexpr auto PML4StartIndex = 0400400400000U;
+    static constexpr auto LevelBits = 9;
     static void Init()
     {
         auto entry = x86_64_LoadCR3();
@@ -127,33 +134,73 @@ struct Mapper
         __asm__ volatile("":::"memory");
         UnmapUnsafe(&__mapping_window);
     }
-    static auto Table(std::ptrdiff_t index) -> x86_64_PageEntry&
+    static auto Entry(std::ptrdiff_t index) -> x86_64_PageEntry&
     {//0400400400400
-        return *(ptr_cast<x86_64_PageEntry*>(-0x800000000000) + index);
+        return *(ptr_cast<x86_64_PageEntry*>(PageTableAddr) + index);
     }
-    static auto TableByAddr(void* addr) -> x86_64_PageEntry&
+    static auto IndexOf(void* addr) -> std::ptrdiff_t
     {
-        return TableByAddr(ptr_cast<std::uintptr_t>(addr));
+        return IndexOf(ptr_cast<std::uintptr_t>(addr));
     }
-    static auto TableByAddr(std::uintptr_t addr) -> x86_64_PageEntry&
+    static auto IndexOf(std::uintptr_t addr) -> std::ptrdiff_t
     {
-        return Table((addr / PageSize) & 0xFFFFFFFFF);
+        return (addr / PageSize) & IndexMask;
+    }
+    static auto EntryByAddr(void* addr) -> x86_64_PageEntry&
+    {
+        return Entry(IndexOf(addr));;
+    }
+    static auto EntryByAddr(std::uintptr_t addr) -> x86_64_PageEntry&
+    {
+        return Entry(IndexOf(addr));
+    }
+    static void InvalidateSingle(std::ptrdiff_t index)
+    {
+        auto addr = CanonizeAddr(std::uintptr_t(index) * PageSize);
+        x86_64_FlushPageTLB(ptr_cast<void*>(addr));
+    }
+    static void Invalidate(std::ptrdiff_t index)
+    {
+        constexpr auto TopLevelMask = 0777000000000;
+        while (1) {
+            InvalidateSingle(index);
+            if ((index & TopLevelMask) != PageDirectoriesStartIndex) {
+                break;
+            }
+            index *= 01000;
+        }
+    }
+    static void InvalidateByAddr(void* addr)
+    {
+        Invalidate(IndexOf(addr));
+    }
+    static void InvalidateByAddr(std::uintptr_t addr)
+    {
+        Invalidate(IndexOf(addr));
+    }
+    static void Set(std::ptrdiff_t index, uint64_t newPage)
+    {
+        Entry(index) = x86_64_MakePageEntry(
+            newPage, x86_64_PageEntryFlag_Present | x86_64_PageEntryFlag_Write);
+    }
+    static auto Reset(std::ptrdiff_t index) -> uint64_t
+    {
+        auto& t = Entry(index);
+        auto ptr = x86_64_PageEntry_GetAddr(t);
+        t = {};
+        Invalidate(index);
+        return ptr;
     }
     static auto UnmapUnsafe(void* addr) -> std::uint64_t
     {
-        auto& entry = TableByAddr(addr);
-        auto result = x86_64_PageEntry_GetAddr(entry);
-        entry = {};
-        x86_64_FlushPageTLB(addr);
-        return result;
+        return Reset(IndexOf(addr));
     }
     static void* MapUnsafe(std::uintptr_t vAddr, std::uint64_t pAddr)
     {
-        TableByAddr(vAddr) = x86_64_MakePageEntry(
+        EntryByAddr(vAddr) = x86_64_MakePageEntry(
             pAddr, x86_64_PageEntryFlag_Present | x86_64_PageEntryFlag_Write);
-        auto ptr = ptr_cast<void*>(vAddr);
-        x86_64_FlushPageTLB(ptr);
-        return ptr;
+        InvalidateByAddr(vAddr);
+        return ptr_cast<void*>(vAddr);
     }
     static bool FillEntries(
         std::ptrdiff_t begin, std::ptrdiff_t end,
@@ -165,8 +212,7 @@ struct Mapper
                 ClearEntries(begin, i, alloc);
                 return false;
             }
-            Table(i) = x86_64_MakePageEntry(
-                p, x86_64_PageEntryFlag_Present | x86_64_PageEntryFlag_Write);
+            Set(i, p);
         }
         if (end > begin) {
             auto addr = CanonizeAddr(std::uintptr_t(begin) * PageSize);
@@ -182,18 +228,13 @@ struct Mapper
     {
         for (auto i = end; i > begin;) {
             --i;
-            auto& t = Table(i);
-            auto ptr = x86_64_PageEntry_GetAddr(t);
-            t = {};
-            auto addr = CanonizeAddr(std::uintptr_t(i) * PageSize);
-            x86_64_FlushPageTLB(ptr_cast<void*>(addr));
-            alloc->free(ptr);
+            alloc->free(Reset(i));
         }
     }
     static bool EntriesPresent(std::ptrdiff_t begin, std::ptrdiff_t end)
     {
         for (auto i = begin; i != end; ++i) {
-            auto &t = Table(i);
+            auto &t = Entry(i);
             if (t.data & x86_64_PageEntryFlag_Present) {
                 return true;
             }
@@ -211,15 +252,15 @@ struct Mapper
         if (args->level == 3) {
             return true;
         }
-        auto levelID = (0400400400000U << (args->level * 9)) & 0xFFFFFFFFF;
+        auto levelID = (PML4StartIndex << (args->level * LevelBits)) & IndexMask;
         auto level = 3 - args->level;
-        auto begin = (args->begin >> (level * 9)) | levelID;
-        auto end = args->end - 1 + (1 << (level * 9));
-        end = (end >> (level * 9)) | levelID;
-        if (Table(begin).data & x86_64_PageEntryFlag_Present) {
+        auto begin = (args->begin >> (level * LevelBits)) | levelID;
+        auto end = args->end - 1 + (1 << (level * LevelBits));
+        end = (end >> (level * LevelBits)) | levelID;
+        if (Entry(begin).data & x86_64_PageEntryFlag_Present) {
             ++begin;
         }
-        if (Table(end - 1).data & x86_64_PageEntryFlag_Present) {
+        if (Entry(end - 1).data & x86_64_PageEntryFlag_Present) {
             --end;
         }
         if (!FillEntries(begin, end, args->alloc)) {
@@ -234,20 +275,20 @@ struct Mapper
     }
     static void ClearLevels(Args* args)
     {
-        auto levelID = 0400000000000U;
+        auto levelID = PageDirectoriesStartIndex;
         for (int i = 2; i != 0; --i) {
-            args->begin = (args->begin >> 9) | levelID;
-            args->end = (args->end >> 9) | levelID;
-            levelID |= levelID >> 9;
+            args->begin = (args->begin >> LevelBits) | levelID;
+            args->end = (args->end >> LevelBits) | levelID;
+            levelID |= levelID >> LevelBits;
             if (args->end <= args->begin) {
                 return;
             }
             ClearEntries(args->begin, args->end, args->alloc);
-            if (EntriesPresent(args->begin & 0777777777000, args->begin)) {
-                args->begin += 0777;
+            if (EntriesPresent(args->begin & NonBottomLevelMask, args->begin)) {
+                args->begin += BottomLevelMask;
             }
-            auto newEnd = args->end + 0777;
-            if (!EntriesPresent(args->end, newEnd & 0777777777000)) {
+            auto newEnd = args->end + BottomLevelMask;
+            if (!EntriesPresent(args->end, newEnd & NonBottomLevelMask)) {
                 args->end = newEnd;
             }
         }
@@ -267,8 +308,8 @@ struct Mapper
     {
         Args args = {};
         args.alloc = ptAlloc;
-        args.begin = (vaddr / PageSize) & 0xFFFFFFFFF;
-        args.end = ((vaddr + size + PageMask) / PageSize) & 0xFFFFFFFFF;
+        args.begin = (vaddr / PageSize) & IndexMask;
+        args.end = ((vaddr + size + PageMask) / PageSize) & IndexMask;
         if (!FillLevels(&args)) {
             return false;
         }
@@ -289,14 +330,14 @@ struct Mapper
     {
         Mapper::Args args = {};
         args.alloc = ptAlloc;
-        args.begin = (vaddr / PageSize) & 0xFFFFFFFFF;
-        args.end = ((vaddr + size + PageMask) / PageSize) & 0xFFFFFFFFF;
+        args.begin = (vaddr / PageSize) & IndexMask;
+        args.end = ((vaddr + size + PageMask) / PageSize) & IndexMask;
         ClearEntries(args.begin, args.end, alloc);
-        if (EntriesPresent(args.begin & 0777777777000, args.begin)) {
-            args.begin += 0777;
+        if (EntriesPresent(args.begin & NonBottomLevelMask, args.begin)) {
+            args.begin += BottomLevelMask;
         }
-        auto newEnd = args.end + 0777;
-        if (!EntriesPresent(args.end, newEnd & 0777777777000)) {
+        auto newEnd = args.end + BottomLevelMask;
+        if (!EntriesPresent(args.end, newEnd & NonBottomLevelMask)) {
             args.end = newEnd;
         }
         ClearLevels(&args);
