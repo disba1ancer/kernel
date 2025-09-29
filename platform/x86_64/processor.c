@@ -8,3 +8,4 @@ extern inline void* x86_64_FlushPageTLB2(uintptr_t addr);
 extern inline x86_64_PageEntry x86_64_LoadCR3(void);
 extern inline void *i686_LoadPointer(i686_RMPtr fptr);
 extern inline i686_RMPtr i686_MakeRMPointer(void *ptr);
+extern inline void x86_64_LoadGDT(x86_64_GDTR *ptr);

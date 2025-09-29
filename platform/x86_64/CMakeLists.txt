@@ -17,6 +17,8 @@ target_sources(platform_x86_64 PRIVATE
     memset.s
     processor.c
     processor.h
+    segment.c
+    segment.h
     strchr.s
     strcmp.s
     strlen.s

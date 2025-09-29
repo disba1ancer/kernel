@@ -1,7 +1,6 @@
-#include <stdlib.h>
 #include "kernel/bootdata.h"
 #include "alloc.h"
-#include "processor.h"
+#include "segment.h"
 
 void kernel_x86_64_EnableInterrupts(void);
 _Noreturn void cpp_start(void);
@@ -21,6 +20,7 @@ struct LdrState {
 _Noreturn void c_start(const kernel_LdrData *data, struct LdrState *state)
 {
     kernel_LoaderData = data;
+    InitGDT();
     kernel_InitAllocator();
     kernel_x86_64_EnableInterrupts();
     cpp_start();

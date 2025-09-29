@@ -18,7 +18,7 @@ idt_handlers:
         jmp     universal_handler
 .section .data.kinterrupts, "aw"
         .word   0b - idt_handlers + idt_base_low
-        .word   0x28
+        .word   0x20
         .quad   idt_base_high + 0x8E00
         .long   0
 .set i, i + 1

@@ -262,4 +262,16 @@ T* i686_LoadPointer(i686_RMPtr fptr) {
 }
 #endif
 
+typedef struct x86_64_GDTR {
+    alignas(i686_Descriptor*)
+    uint32_t rsv0;
+    uint16_t rsv1;
+    uint16_t limit;
+    i686_Descriptor* gdt;
+} x86_64_GDTR;
+
+inline void x86_64_LoadGDT(x86_64_GDTR *ptr) {
+    __asm__ volatile("lgdt 6(%0)"::"r"(ptr));
+}
+
 #endif // PROCESSOR_H
