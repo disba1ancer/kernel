@@ -3,27 +3,33 @@
 .text
 .set i, 0
 IDTEntries = 256
-SizeOfIDT = 16 * IDTEntries
+LimitOfIDT = 16 * IDTEntries - 1
 
 .section .data.kinterrupts, "aw"
 .align 64
 idt:
 
+.section .text.interrupt, "ax"
+.global idt_handlers
+idt_handlers:
 .rept IDTEntries
-.text
-0:      push    i
+.section .text.interrupt, "ax"
+0:      push    (i ^ 0x80) - 0x80
         jmp     universal_handler
 .section .data.kinterrupts, "aw"
-        .word   0x8E00
+        .word   0b - idt_handlers + idt_base_low
         .word   0x28
-        .quad   0b
+        .quad   idt_base_high + 0x8E00
         .long   0
 .set i, i + 1
 .endr
 
-.text
+.section .text.interrupt, "ax"
 universal_handler:
+.cfi_startproc
+.cfi_adjust_cfa_offset 8
         sub     rsp, 0x78
+.cfi_adjust_cfa_offset 0x78
         mov       0[rsp], rax
         lea     rax, [rsp + 0x80]
         mov       8[rsp], rcx
@@ -31,9 +37,10 @@ universal_handler:
         mov      24[rsp], rbx
         mov      32[rsp], rax
         mov      40[rsp], rbp
+.cfi_rel_offset rbp, 40
         mov      48[rsp], rsi
         mov      56[rsp], rdi
-        mov     rdi, 120[rsp]
+        movzx   rdi, byte ptr 120[rsp]
         mov      64[rsp], r8
         mov      72[rsp], r9
         mov      80[rsp], r10
@@ -44,15 +51,18 @@ universal_handler:
         mov     120[rsp], r15
         mov     rsi, rsp
         mov     rbp, rsp
+.cfi_def_cfa_register rbp
         cld
         and     rsp, -16
         call    kernel_x86_64_SystemInterruptHandler
         mov     rsp, rbp
+.cfi_def_cfa_register rsp
         mov     rax,   0[rsp]
         mov     rcx,   8[rsp]
         mov     rdx,  16[rsp]
         mov     rbx,  24[rsp]
         mov     rbp,  40[rsp]
+.cfi_restore rbp
         mov     rsi,  48[rsp]
         mov     rdi,  56[rsp]
         mov     r8 ,  64[rsp]
@@ -64,31 +74,14 @@ universal_handler:
         mov     r14, 112[rsp]
         mov     r15, 120[rsp]
         mov     rsp,  32[rsp]
+.cfi_adjust_cfa_offset -0x80
         iretq
+.cfi_endproc
 
+.text
 .global kernel_x86_64_EnableInterrupts
 .type kernel_x86_64_EnableInterrupts, @function
 kernel_x86_64_EnableInterrupts:
-        movabs  rcx, offset idt
-0:      mov     eax, 0[rcx]
-        mov     edx, 4[rcx]
-        mov     esi, 16[rcx]
-        mov     edi, 20[rcx]
-        mov     r8d, 32[rcx]
-        mov     r9d, 36[rcx]
-        mov     r10d, 48[rcx]
-        mov     r11d, 52[rcx]
-        mov     0[rcx], dx
-        mov     4[rcx], ax
-        mov     16[rcx], di
-        mov     20[rcx], si
-        mov     32[rcx], r9w
-        mov     36[rcx], r8w
-        mov     48[rcx], r11w
-        mov     52[rcx], r10w
-        add     rcx, 64
-        cmp     rcx, offset idt + SizeOfIDT
-        jb      0b
         lidt    idtr
 
         in      al, 0x21
@@ -173,6 +166,9 @@ kernel_x86_64_KeyboardIRQ:
         ret
 
 .data
+.align	8
+	.long	0
+	.word	0
 idtr:
-        .word   SizeOfIDT
+        .word   LimitOfIDT
         .quad   idt
