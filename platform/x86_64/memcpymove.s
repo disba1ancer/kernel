@@ -87,9 +87,10 @@ memmove:
         jnz     1f
 0:      ret
 
-1:      mov     rcx, rsi
-        sub     rcx, rdi
+1:      mov     rcx, rdi
+        sub     rcx, rsi
         jz      0b
+	cmp	rcx, rdx
         jnc     .Lmvdir
         std
         add     rdi, rdx
