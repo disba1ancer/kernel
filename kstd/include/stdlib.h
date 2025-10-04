@@ -24,18 +24,25 @@ void free(void *ptr);
 void qsort(void* ptr, size_t count, size_t size,
     int (*comp)(const void*, const void*));
 
+_KSTD_EXTERN_END
+
 #define GENERATE(type, namepref)\
-_KSTD_CONSTEXPR inline type namepref##abs(type val);
+_KSTD_CONSTEXPR inline type namepref##abs(type val)\
+{\
+    return val < 0 ? -val : val;\
+}
 
 GENERATE(int, )
 GENERATE(long, l)
 GENERATE(long long, ll)
 GENERATE(intmax_t, imax)
+
+#ifdef _KSTD_CPPMODE
+GENERATE(long, )
+GENERATE(long long, )
+#endif
+
 #undef GENERATE
-
-_KSTD_EXTERN_END
-
-#include "kstd/stdlib_impl.h"
 
 #ifdef _KSTD_CPPMODE
 } // namespace std
