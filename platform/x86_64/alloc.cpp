@@ -692,20 +692,23 @@ struct VMM
         if (crBegin != addressTree.Begin()) {
             auto prev = crBegin; --prev;
             auto& prevNode = *prev;
-            sizeTree.Erase(prevNode);
-            if (crBegin != addressTree.End() && r.end == crBegin->get_address()) {
-                prevNode.set_size(r.end - prev->get_address() + crBegin->get_size());
-                Erase(*crBegin);
-            } else {
-                prevNode.set_size(r.end - prev->get_address());
+            if (prevNode.get_address() + prevNode.get_size() == r.begin) {
+                sizeTree.Erase(prevNode);
+                if (crBegin != addressTree.End() && r.end == crBegin->get_address()) {
+                    prevNode.set_size(r.end - prevNode.get_address() + crBegin->get_size());
+                    Erase(*crBegin);
+                } else {
+                    prevNode.set_size(r.end - prevNode.get_address());
+                }
+                sizeTree.Insert(prevNode);
+                return;
             }
-            sizeTree.Insert(prevNode);
-            return;
         }
         if (crBegin != addressTree.End() && r.end == crBegin->get_address()) {
             auto& prevNode = *crBegin;
             sizeTree.Erase(prevNode);
-            prevNode.set_size(r.end + prevNode.get_size() - r.begin);
+            prevNode.set_address(r.begin);
+            prevNode.set_size(r.end - r.begin + prevNode.get_size());
             sizeTree.Insert(prevNode);
             return;
         }
