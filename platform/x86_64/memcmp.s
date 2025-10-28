@@ -5,93 +5,89 @@
 .type memcmp, @function
 memcmp:
         # rdi rsi rdx
-        mov     rax, rdx
-        add     rdx, rdi
-        cmp     rax, 16
-        jb      .Lmemcmp1
+        xor     eax, eax
+        test    rdx, rdx
+        jz      .Lret
 
-        test    edi, 7
-        jz      1f
-0:      movzx   eax, byte ptr [rdi]
-        movzx   ecx, byte ptr [rsi]
-        sub     eax, ecx
-        jne     2f
-        add     rdi, 1
-        add     rsi, 1
-        test    edi, 7
-        jnz     0b
-1:      mov     eax, esi
+        mov     rax, rdi
+        sub     rax, rsi
+        jz      .Lret
+
+        cmp     rdx, 128
+        jc      .Lmemcmp1
+
         and     eax, 7
-        jmp     .Lmemcmp_Tbl[rax * 8]
+        jz      .Lmemcmp8
+        lea     rcx, [rip + .Lmemcmp_Tbl]
+        bsf     eax, eax
+        lea     rcx, [rcx + rax * 8]
+        xor     eax, eax
+        jmp     [rcx]
 
 .section .rodata
 .align 8
 .Lmemcmp_Tbl:
-        .8byte  .Lmemcmp8
-        .8byte  .Lmemcmp1
-        .8byte  .Lmemcmp2
-        .8byte  .Lmemcmp1
-        .8byte  .Lmemcmp4
-        .8byte  .Lmemcmp1
-        .8byte  .Lmemcmp2
-        .8byte  .Lmemcmp1
+        .quad   .Lmemcmp1
+        .quad   .Lmemcmp2
+        .quad   .Lmemcmp4
 .text
 
-.Lmemcmp1:
-0:      movzx   eax, byte ptr [rdi]
-        movzx   ecx, byte ptr [rsi]
-        sub     eax, ecx
-        jne     2f
-        add     rdi, 1
-        add     rsi, 1
-        cmp     rdi, rdx
-        jb      0b
-2:      ret
+.Lmemcmp8:
+        lea     ecx, [rsi + 7]
+        and     ecx, -8
+        sub     ecx, esi
+        jz      0f
+        sub     rdx, rcx
+        repe cmps [rsi], byte ptr[rdi]
+        jnz     .Lneq
+0:      mov     rcx, rdx
+        shr     rcx, 3
+        and     rdx, 7
+        repe cmps [rsi], qword ptr[rdi]
+        jz      .Lmemcmp1
+        sub     rsi, 8
+        lea     rdi, [rdi - 8]
+        mov     rdx, 8
 
-.Lmemcmp2:
-0:      movzx   eax, word ptr [rdi]
-        movzx   ecx, word ptr [rsi]
-        sub     eax, ecx
-        jne     1f
-        add     rdi, 2
-        add     rsi, 2
-        cmp     rdi, rdx
-        jb      0b
-        ret
+.Lmemcmp1:
+        xor     eax, eax
+        mov     rcx, rdx
+        repe cmps [rsi], byte ptr[rdi]
+        je      .Lret
+.Lneq:  adc     eax, 0
+        lea     eax, [rax + rax - 1]
+.Lret:  ret
 
 .Lmemcmp4:
-0:      mov     eax, [rdi]
-        mov     ecx, [rsi]
-        sub     eax, ecx
-        jne     1f
-        add     rdi, 3
-        add     rsi, 3
-        cmp     rdi, rdx
-        jb      0b
-        ret
+        lea     ecx, [rsi + 3]
+        and     ecx, -4
+        sub     ecx, esi
+        jz      0f
+        sub     rdx, rcx
+        repe cmps [rsi], byte ptr[rdi]
+        jnz     .Lneq
+0:      mov     rcx, rdx
+        shr     rcx, 2
+        and     rdx, 3
+        repe cmps [rsi], dword ptr[rdi]
+        jz      .Lmemcmp1
+        sub     rsi, 4
+        lea     rdi, [rdi - 4]
+        mov     rdx, 4
+        jmp     .Lmemcmp1
 
-.Lmemcmp8:
-0:      mov     rax, [rdi]
-        mov     rcx, [rsi]
-        sub     rax, rcx
-        jne     1f
-        add     rdi, 8
-        add     rsi, 8
-        cmp     rdi, rdx
-        jb      0b
-        ret
-
-1:      mov     rsi, rcx
-        bsf     rcx, rax
-        and     ecx, 0x38
-        shr     rax, cl
-        shr     rsi, cl
-        shr     ecx, 3
-        add     eax, esi
-        add     rdi, rcx
-        movzx   esi, sil
-        cmp     rdi, rdx
-        movzx   eax, al
-        cmovae  esi, eax
-        sub     eax, esi
-        ret
+.Lmemcmp2:
+        test    rsi, 1
+        jz      0f
+        sub     rdx, 1
+        cmps    [rsi], byte ptr[rdi]
+        jnz     .Lneq
+0:      mov     rcx, rdx
+        shr     rcx, 1
+        and     rdx, 1
+        repe cmps [rsi], word ptr[rdi]
+        jz      .Lmemcmp1
+        sub     rsi, 2
+        lea     rdi, [rdi - 2]
+        mov     rdx, 2
+        jmp     .Lmemcmp1
