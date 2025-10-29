@@ -2,7 +2,7 @@
 .text
 .global _start
 _start:
-        mov     rsi, offset __init_stack_end - 0x40
+        lea     rsi, __init_stack_end - 0x40[rip]
         mov     0[rsi], rbx
         mov     8[rsi], rsp
         mov     16[rsi], rbp

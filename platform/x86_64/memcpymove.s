@@ -18,8 +18,9 @@ memcpy:
         lea     rdx, [rdx + rsi]
         jc      .Lmemcpy1
 
+        lea     rax, .Lmemcpy_tbl[rip]
         and     rcx, 7
-        jmp     .Lmemcpy_tbl[rcx * 8]
+        jmp     [rax + rcx * 8]
 
 .section .rodata
 .align 8
@@ -99,8 +100,9 @@ memmove:
         cmp     rdx, 16
         jc      .Lmemmove1
 
+        lea     r8, .Lmemmove_Tbl[rip]
         and     rcx, 7
-        jmp     .Lmemmove_Tbl[rcx * 8]
+        jmp     [r8 + rcx * 8]
 
 .section .rodata
 .align 8

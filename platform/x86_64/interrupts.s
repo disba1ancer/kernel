@@ -3,7 +3,8 @@
 .text
 .set i, 0
 IDTEntries = 256
-LimitOfIDT = 16 * IDTEntries - 1
+SizeOfIDT = 16 * IDTEntries
+LimitOfIDT = SizeOfIDT - 1
 
 .section .data.kinterrupts, "aw"
 .align 64
@@ -17,9 +18,9 @@ idt_handlers:
 0:      push    (i ^ 0x80) - 0x80
         jmp     universal_handler
 .section .data.kinterrupts, "aw"
-        .word   0b - idt_handlers + idt_base_low
+        .word   0x8E00
         .word   0x20
-        .quad   idt_base_high + 0x8E00
+        .quad   0b
         .long   0
 .set i, i + 1
 .endr
@@ -82,7 +83,21 @@ universal_handler:
 .global kernel_x86_64_EnableInterrupts
 .type kernel_x86_64_EnableInterrupts, @function
 kernel_x86_64_EnableInterrupts:
-        lidt    idtr
+        mov     r8, rbx
+        xor     ecx, ecx
+        lea     rbx, idt[rip]
+0:      mov     eax, 0[rbx + rcx]
+        mov     edx, 4[rbx + rcx]
+        mov     esi, 16[rbx + rcx]
+        mov     edi, 20[rbx + rcx]
+        mov     0[rbx + rcx], dx
+        mov     4[rbx + rcx], ax
+        mov     16[rbx + rcx], di
+        mov     20[rbx + rcx], si
+        add     rcx, 32
+        cmp     rcx, SizeOfIDT
+        jb      0b
+        lidt    idtr[rip]
 
         in      al, 0x21
         movzx   esi, al
@@ -165,10 +180,9 @@ kernel_x86_64_KeyboardIRQ:
         mov     [0xb8000], al
         ret
 
-.data
+.section .rodata
 .align	8
-	.long	0
-	.word	0
+        .skip   6
 idtr:
         .word   LimitOfIDT
         .quad   idt

@@ -15,9 +15,9 @@ void InitGDT(void)
 {
     x86_64_LoadGDT(&gdtr);
     __asm__ volatile(
-"rex.w  ljmp    *0f\n"
-"0:.quad 0f\n"
-".word  0x20\n"
+"rex.w  ljmp    *0f(%%rip)\n"
+"0:     .quad   0f\n"
+"       .word   0x20\n"
 "0:     mov     %0, %%ds\n"
 "       mov     %0, %%ss\n"
 "       mov     %0, %%es\n"

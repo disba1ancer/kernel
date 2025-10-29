@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.5)
 
 set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} -nodefaultlibs")
-set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS}   -nodefaultlibs -ffreestanding -mcmodel=kernel -mno-red-zone -Wall -Wextra -pedantic -pedantic-errors")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -nodefaultlibs -ffreestanding -mcmodel=kernel -mno-red-zone -Wall -Wextra -pedantic -pedantic-errors") # -fno-exceptions -fno-rtti
+set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS}   -nodefaultlibs -ffreestanding -fpie -mno-red-zone -Wall -Wextra -pedantic -pedantic-errors")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -nodefaultlibs -ffreestanding -fpie -mno-red-zone -Wall -Wextra -pedantic -pedantic-errors")
 
 project(kernel LANGUAGES CXX C ASM)
 

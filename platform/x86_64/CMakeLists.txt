@@ -4,7 +4,6 @@ add_library(platform ALIAS platform_x86_64)
 target_sources(platform_x86_64 PRIVATE
     alloc.cpp
     alloc.h
-    alloc.s
     exit.c
     init.c
     init.cpp

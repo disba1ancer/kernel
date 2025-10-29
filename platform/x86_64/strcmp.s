@@ -18,9 +18,10 @@ strcmp: # (edi, esi)
 
 1:      mov     eax, esi
         mov     r10, 0xFEFEFEFEFEFEFEFF
+        lea     r8, .Lstrcmp_Tbl[rip]
         and     eax, 7
         mov     r11, 0x8080808080808080
-        jmp     .Lstrcmp_Tbl[rax * 8]
+        jmp     [r8 + rax * 8]
 
 0:      ret
 
