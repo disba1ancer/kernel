@@ -97,6 +97,7 @@ kernel_x86_64_EnableInterrupts:
         add     rcx, 32
         cmp     rcx, SizeOfIDT
         jb      0b
+        mov     rbx, r8
         lidt    idtr[rip]
 
         in      al, 0x21

@@ -1,6 +1,7 @@
 .intel_syntax noprefix
 .text
 .global _start
+.type _start, @function
 _start:
         lea     rsi, __init_stack_end - 0x40[rip]
         mov     0[rsi], rbx
