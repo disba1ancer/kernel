@@ -3,16 +3,20 @@
 .global _start
 .type _start, @function
 _start:
-        lea     rsi, __init_stack_end - 0x40[rip]
-        mov     0[rsi], rbx
-        mov     8[rsi], rsp
-        mov     16[rsi], rbp
-        mov     24[rsi], r12
-        mov     32[rsi], r13
-        mov     40[rsi], r14
-        mov     48[rsi], r15
-        mov     rsp, rsi
-        call    c_start
+        lea     rsp, __init_stack_end - 0x18[rip]
+        lea     rcx, kernel_EndlessLoop[rip]
+        mov     16[rsp], rcx
+        mov     dword ptr 8[rsp], 0x10
+        lea     rcx, cpp_start[rip]
+        mov     [rsp], rcx
+        lgdt    6 + gdtr[rip]
+        mov     eax, 0x20
+        mov     ds, eax
+        mov     ss, eax
+        mov     es, eax
+        mov     fs, eax
+        mov     gs, eax
+        retfq
 
 .global kernel_EndlessLoop
 .type kernel_EndlessLoop, @function

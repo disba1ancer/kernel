@@ -6,26 +6,22 @@
  * Unmap - unmap physical memory from specified virtual memory, frees physical RAM if it was mapped
  *
  * enum FlagsGeneric {
- * Present,
- * Write,
- * Execute,
- * System
- * };
- *
- * enum FlagsArch {
- * Specified, // Map specified physical address
- * WriteBack,
- * WriteCombine,
- * WriteProtect,
- * WriteThrough,
- * NoCache,
+ * + NoAlloc = 1,
+ *   Map = 2,
+ *   AllocMask = 3,
+ *   WriteToggle = 4,
+ *   Execute = 8,
+ *   System = 16,
+ *   NoCache = 32,
+ *   WriteCombine = 64,
+ *   CacheMask = 96,
  * };
  *
  * enum FreeFrags {
  * Reserve
  * };
  *
- * VirtualRange Alloc(void* vAddr, size_t size, enum FlagsGeneric flags, uint64_t pArgs)
+ * VirtualRange Alloc(size_t size, enum FlagsGeneric flags, uint64_t pAddr, void* vAddr)
  * void Free(void* vAddr, size_t size, enum FlagsGeneric flags);
  *
  * struct PageMM {
@@ -46,23 +42,30 @@
 #include <cstring>
 #include <algorithm>
 #include <memory>
+#include <limits>
 
-using kernel::ptr_cast;
+namespace kernel::tgtspec {
 
 namespace {
 
-constexpr auto PageSize = 4096;
+using byte = unsigned char;
+
+constexpr auto PageBoundBits = 12;
+constexpr auto PageSize = 1U << PageBoundBits;
 constexpr auto PageMask = PageSize - 1;
 constexpr std::uint64_t InvalidPage = -1;
 
 } // namespace
 
-extern "C" const kernel_LdrData* kernel_LoaderData;
-extern "C" x86_64_PageEntry __mapping_window[];
+extern const kernel_LdrData* loaderData;
+
+extern "C" x86_64::PageEntry __mapping_window[];
 extern "C" alignas(PageSize) unsigned char __smheap_start[];
 extern "C" alignas(PageSize) unsigned char __smheap_end[];
 
 namespace {
+
+std::uint64_t zeroPage;
 
 auto FindMemoryMap(const kernel_LdrData* data) -> const kernel_MemoryMap*
 {
@@ -75,31 +78,18 @@ auto FindMemoryMap(const kernel_LdrData* data) -> const kernel_MemoryMap*
     return NULL;
 }
 
-auto FindFirstAvailableEntry(const kernel_MemoryMapEntry* entries, std::uint64_t count)
-    -> const kernel_MemoryMapEntry*
-{
-    for (uint64_t i = 0; i < count; ++i) {
-        if (entries[i].type == kernel_MemoryMapEntryType_AvailableMemory &&
-            (entries[i].flags & 0xF) == 1)
-        {
-            return entries + i;
-        }
-    }
-    return NULL;
-}
-
-auto FindBoundaryEntry(
-        const kernel_MemoryMapEntry *entries,
-        std::uint64_t count,
-        std::uint64_t boundary
+auto FindNextAvailableEntry(
+    const kernel_MemoryMapEntry *entries,
+    std::ptrdiff_t count,
+    std::ptrdiff_t from
 )
 -> std::ptrdiff_t {
-    auto end = entries + count;
-    auto entry = FindFirstAvailableEntry(entries, count);
-    while (entry != end && !(boundary - entry->begin <= entry->size)) {
-        ++entry;
+    for (std::ptrdiff_t i = from; i < count; ++i) {
+        if (entries[i].type == kernel_MemoryMapEntryType_AvailableMemory) {
+            return i;
+        }
     }
-    return entry - entries;
+    return count;
 }
 
 auto CanonizeAddr(std::uintptr_t addr) -> std::uintptr_t
@@ -112,6 +102,23 @@ struct ISinglePageAlloc {
     virtual void free(std::uint64_t) = 0;
 };
 
+struct InvalidPageAlloc : ISinglePageAlloc {
+    virtual auto alloc() -> std::uint64_t override
+    {
+        return InvalidPage;
+    }
+    virtual void free(std::uint64_t) override {}
+};
+
+struct DupPageAlloc : ISinglePageAlloc {
+    virtual auto alloc() -> std::uint64_t override
+    {
+        return page;
+    }
+    virtual void free(std::uint64_t) override {}
+    uint64_t page;
+};
+
 struct Mapper
 {
     static constexpr auto IndexMask = 0xFFFFFFFFF;
@@ -122,22 +129,10 @@ struct Mapper
     static constexpr auto PML4StartIndex = 0400400400000U;
     static constexpr auto LevelBits = 9;
     static void Init()
-    {
-        auto entry = x86_64_LoadCR3();
-        entry = x86_64_MakePageEntry(
-            x86_64_PageEntry_GetAddr(entry),
-            x86_64_PageEntryFlag_Present | x86_64_PageEntryFlag_Write,
-            0
-        );
-        __mapping_window[511] = entry;
-        x86_64_FlushPageTLB(&__mapping_window);
-        __mapping_window[256] = entry;
-        __asm__ volatile("":::"memory");
-        UnmapUnsafe(&__mapping_window);
-    }
-    static auto Entry(std::ptrdiff_t index) -> x86_64_PageEntry&
+    {}
+    static auto Entry(std::ptrdiff_t index) -> x86_64::PageEntry&
     {//0400400400400
-        return *(ptr_cast<x86_64_PageEntry*>(PageTableAddr) + index);
+        return *(ptr_cast<x86_64::PageEntry*>(PageTableAddr) + index);
     }
     static auto IndexOf(void* addr) -> std::ptrdiff_t
     {
@@ -147,18 +142,18 @@ struct Mapper
     {
         return (addr / PageSize) & IndexMask;
     }
-    static auto EntryByAddr(void* addr) -> x86_64_PageEntry&
+    static auto EntryByAddr(void* addr) -> x86_64::PageEntry&
     {
         return Entry(IndexOf(addr));;
     }
-    static auto EntryByAddr(std::uintptr_t addr) -> x86_64_PageEntry&
+    static auto EntryByAddr(std::uintptr_t addr) -> x86_64::PageEntry&
     {
         return Entry(IndexOf(addr));
     }
     static void InvalidateSingle(std::ptrdiff_t index)
     {
         auto addr = CanonizeAddr(std::uintptr_t(index) * PageSize);
-        x86_64_FlushPageTLB(ptr_cast<void*>(addr));
+        x86_64::FlushPageTLB(ptr_cast<void*>(addr));
     }
     static void Invalidate(std::ptrdiff_t index)
     {
@@ -181,13 +176,13 @@ struct Mapper
     }
     static void Set(std::ptrdiff_t index, uint64_t newPage)
     {
-        Entry(index) = x86_64_MakePageEntry(
-            newPage, x86_64_PageEntryFlag_Present | x86_64_PageEntryFlag_Write);
+        Entry(index) = x86_64::MakePageEntry(
+            newPage, x86_64::PageEntryFlag_Present | x86_64::PageEntryFlag_Write);
     }
     static auto Reset(std::ptrdiff_t index) -> uint64_t
     {
         auto& t = Entry(index);
-        auto ptr = x86_64_PageEntry_GetAddr(t);
+        auto ptr = x86_64::PageEntry_GetAddr(t);
         t = {};
         Invalidate(index);
         return ptr;
@@ -198,8 +193,8 @@ struct Mapper
     }
     static void* MapUnsafe(std::uintptr_t vAddr, std::uint64_t pAddr)
     {
-        EntryByAddr(vAddr) = x86_64_MakePageEntry(
-            pAddr, x86_64_PageEntryFlag_Present | x86_64_PageEntryFlag_Write);
+        EntryByAddr(vAddr) = x86_64::MakePageEntry(
+            pAddr, x86_64::PageEntryFlag_Present | x86_64::PageEntryFlag_Write);
         InvalidateByAddr(vAddr);
         return ptr_cast<void*>(vAddr);
     }
@@ -236,7 +231,7 @@ struct Mapper
     {
         for (auto i = begin; i != end; ++i) {
             auto &t = Entry(i);
-            if (t.data & x86_64_PageEntryFlag_Present) {
+            if (t.data & x86_64::PageEntryFlag_Present) {
                 return true;
             }
         }
@@ -258,10 +253,10 @@ struct Mapper
         auto begin = (args->begin >> (level * LevelBits)) | levelID;
         auto end = args->end - 1 + (1 << (level * LevelBits));
         end = (end >> (level * LevelBits)) | levelID;
-        if (Entry(begin).data & x86_64_PageEntryFlag_Present) {
+        if (Entry(begin).data & x86_64::PageEntryFlag_Present) {
             ++begin;
         }
-        if (Entry(end - 1).data & x86_64_PageEntryFlag_Present) {
+        if (Entry(end - 1).data & x86_64::PageEntryFlag_Present) {
             --end;
         }
         if (!FillEntries(begin, end, args->alloc)) {
@@ -305,10 +300,10 @@ struct Mapper
         std::uint64_t next;
     };
     static bool MapWithAlloc(std::uintptr_t vaddr, std::ptrdiff_t size,
-        ISinglePageAlloc *alloc, ISinglePageAlloc *ptAlloc)
+        ISinglePageAlloc *alloc, ISinglePageAlloc *ptAlloc = nullptr)
     {
         Args args = {};
-        args.alloc = ptAlloc;
+        args.alloc = (ptAlloc ? ptAlloc : alloc);
         args.begin = (vaddr / PageSize) & IndexMask;
         args.end = ((vaddr + size + PageMask) / PageSize) & IndexMask;
         if (!FillLevels(&args)) {
@@ -327,10 +322,10 @@ struct Mapper
         return MapWithAlloc(vaddr, size, &alloc, ptAlloc);
     }
     static void UnmapWithAlloc(std::uintptr_t vaddr, std::ptrdiff_t size,
-        ISinglePageAlloc *alloc, ISinglePageAlloc *ptAlloc)
+        ISinglePageAlloc *alloc, ISinglePageAlloc *ptAlloc = nullptr)
     {
         Mapper::Args args = {};
-        args.alloc = ptAlloc;
+        args.alloc = (ptAlloc ? ptAlloc : alloc);
         args.begin = (vaddr / PageSize) & IndexMask;
         args.end = ((vaddr + size + PageMask) / PageSize) & IndexMask;
         ClearEntries(args.begin, args.end, alloc);
@@ -356,12 +351,12 @@ struct SinglePagePMM : ISinglePageAlloc
     using CMapEntry = const kernel_MemoryMapEntry;
     SinglePagePMM()
     {
-        auto memmap = FindMemoryMap(kernel_LoaderData);
+        auto memmap = FindMemoryMap(loaderData);
         auto entries = ptr_cast<CMapEntry*>(memmap->entries);
-        boundary = memmap->allocatedBoundary;
         count = memmap->count;
         map = entries;
-        current = FindBoundaryEntry(map, count, boundary);
+        current = FindNextAvailableEntry(entries, count, 0);
+        boundary = entries[current].begin;
     }
     auto alloc() -> std::uint64_t
     {
@@ -370,18 +365,25 @@ struct SinglePagePMM : ISinglePageAlloc
             auto ptr = ptr_cast<std::uintptr_t>(&__mapping_window);
             auto next = ptr_cast<std::uint64_t*>(Mapper::MapUnsafe(ptr, result));
             lastFree = *std::launder(next);
+            std::memset(next, 0, PageSize);
             Mapper::UnmapUnsafe(next);
             return result;
         }
-        auto cEnd = map[current].begin + map[current].size;
+        auto cEnd = map[current].end;
         if (cEnd == boundary) {
-            if (current == count) {
+            auto next = FindNextAvailableEntry(map, count, current + 1);
+            if (next == count) {
                 return InvalidPage;
             }
-            boundary = map[++current].begin;
+            current = next;
+            boundary = map[next].begin;
         }
         auto result = boundary;
         boundary += PageSize;
+        auto iptr = ptr_cast<std::uintptr_t>(&__mapping_window);
+        auto ptr = Mapper::MapUnsafe(iptr, result);
+        std::memset(ptr, 0, PageSize);
+        Mapper::UnmapUnsafe(ptr);
         return result;
     }
     void free(std::uint64_t addr)
@@ -399,22 +401,17 @@ struct SinglePagePMM : ISinglePageAlloc
     std::uint64_t lastFree = InvalidPage;
 };
 
-template <typename T, typename ... TT>
-struct max_size
-{
-    static constexpr auto value = std::max(sizeof(T), max_size<TT...>::value);
-};
-
-template <typename ... T>
-constexpr auto max_size_v = max_size<T...>::value;
-
 template <class T, class M>
 constexpr T reset_bits(T in, M bitmask)
 {
     return in ^ (bitmask & in);
 }
 
+struct address_node_trait;
+struct size_node_trait;
+
 struct address_node {
+    using avl_tree_node_trait = address_node_trait;
     address_node* children[2];
     address_node* parent;
     std::uintptr_t addressCompressed;
@@ -437,6 +434,7 @@ struct address_node {
 };
 
 struct size_node {
+    using avl_tree_node_trait = size_node_trait;
     size_node* children[2];
     size_node* parent;
     std::ptrdiff_t sizeCompressed;
@@ -458,12 +456,7 @@ struct size_node {
     }
 };
 
-} // namespace
-
-namespace kernel::intrusive {
-
-template <>
-struct AVLTreeNodeTraits<address_node>
+struct address_node_trait
 {
     static auto GetParent(const address_node& node) -> address_node*
     {
@@ -491,8 +484,7 @@ struct AVLTreeNodeTraits<address_node>
     }
 };
 
-template <>
-struct AVLTreeNodeTraits<size_node>
+struct size_node_trait
 {
     static auto GetParent(const size_node& node) -> size_node*
     {
@@ -519,10 +511,6 @@ struct AVLTreeNodeTraits<size_node>
         node.set_balance(balance);
     }
 };
-
-} // namespace kernel::intrusive
-
-namespace  {
 
 struct free_range
 {
@@ -553,61 +541,6 @@ struct free_range_comparator
         return av < bv;
     }
 };
-
-} // namespace
-
-namespace kernel::intrusive {
-
-template <>
-struct AVLTreeNodeTraits<free_range>
-{
-    static auto GetParent(const free_range& node) -> free_range*
-    {
-        return ptr_cast<free_range*>(node.parent ^ (3 & node.parent));
-    }
-    static void SetParent(free_range& node, free_range* parent)
-    {
-        node.parent = (node.parent & 3) | ptr_cast<std::uintptr_t>(parent);
-    }
-    static auto GetChild(const free_range& node, bool right) -> free_range*
-    {
-        return node.children[right];
-    }
-    static void SetChild(free_range& node, bool right, free_range* child)
-    {
-        node.children[right] = child;
-    }
-    static  int GetBalance(const free_range& node)
-    {
-        return node.parent & 3;
-    }
-    static void SetBalance(free_range& node, int balance)
-    {
-        node.parent = (node.parent ^ (3 & node.parent)) | balance;
-    }
-};
-
-template <>
-struct ListNodeTraits<free_range> {
-    using NodeType = free_range;
-    using SentinelType = free_range;
-    static auto GetNext(NodeType& node) -> NodeType* {
-        return node.children[1];
-    }
-    static void SetNext(NodeType& node, NodeType* next) {
-        node.children[1] = next;
-    }
-    static auto GetPrev(NodeType& node) -> NodeType* {
-        return node.children[0];
-    }
-    static void SetPrev(NodeType& node, NodeType* prev) {
-        node.children[0] = prev;
-    }
-};
-
-} // namespace kernel::intrusive
-
-namespace  {
 
 constexpr auto align(std::size_t size, std::size_t align) -> std::size_t
 {
@@ -664,14 +597,327 @@ struct chunked_mem_pool
     list freeObjs;
 };
 
-struct VMM
+struct BasicVMM
 {
     struct mem_range
     {
         std::uintptr_t begin;
         std::uintptr_t end;
     };
+
+    BasicVMM(mem_range* memRanges, std::ptrdiff_t count) :
+        memRanges(memRanges),
+        count(count)
+    {}
+    auto AcquireRange(std::ptrdiff_t size) const -> mem_range
+    {
+        size = align(size, PageSize);
+        for (std::ptrdiff_t i = 0; i < count; ++i) {
+            if (memRanges[i].end - memRanges[i].begin >= size) {
+                return {memRanges[i].begin, memRanges[i].begin += size};
+            }
+        }
+        return {};
+    }
+
+    mem_range *memRanges;
+    std::ptrdiff_t count;
+};
+
+constexpr auto alignDown(std::uint64_t size, std::uint64_t align) -> std::uint64_t
+{
+    return reset_bits(size, align - 1);
+}
+
+constexpr auto alignUp(std::uint64_t size, std::uint64_t align) -> std::uint64_t
+{
+    return alignDown(size + align - 1, align);
+}
+
+auto FindFirstMemRegion(const kernel_MemoryMapEntry* map, std::ptrdiff_t count) -> std::ptrdiff_t
+{
+    for (std::ptrdiff_t i = 0; i < count; ++i) {
+        switch (map[i].type) {
+        case kernel_MemoryMapEntryType_AvailableMemory:
+        case kernel_MemoryMapEntryType_BootReclaimable:
+        case kernel_MemoryMapEntryType_SystemReclaimable:
+            return i;
+        }
+    }
+    return count;
+}
+
+auto FindLastMemRegion(const kernel_MemoryMapEntry* map, std::ptrdiff_t count, std::ptrdiff_t from) -> std::ptrdiff_t
+{
+    std::ptrdiff_t result = from;
+    for (std::ptrdiff_t i = from + 1; i < count; ++i) {
+        switch (map[i].type) {
+        case kernel_MemoryMapEntryType_AvailableMemory:
+        case kernel_MemoryMapEntryType_BootReclaimable:
+        case kernel_MemoryMapEntryType_SystemReclaimable:
+            result = i;
+        }
+    }
+    return result;
+}
+
+struct BuddyAlloc : ISinglePageAlloc {
+    struct PhyRange {
+        std::uint64_t begin;
+        std::uint64_t end;
+    };
+
+    struct BlockListElem {
+        std::uint64_t prev;
+        std::uint64_t next;
+    };
+
+    BuddyAlloc(const BasicVMM& vmm, SinglePagePMM&& pmm)
+    {
+        auto firstMemRange = FindFirstMemRegion(pmm.map, pmm.count);
+        auto lastMemRange = FindLastMemRegion(pmm.map, pmm.count, firstMemRange);
+        range = {pmm.map[firstMemRange].begin, pmm.map[lastMemRange].end};
+        auto size = range.end - range.begin;
+        maxLevel = Log2U64(size / PageSize);
+        auto maxAlign = (std::uint64_t(1) << maxLevel) * PageSize;
+        auto levelCount = maxLevel + 1;
+        range.begin = alignDown(range.begin, maxAlign);
+        range.end = alignUp(range.end, maxAlign);
+        auto bitmapSize = (range.end - range.begin) / PageSize;
+        std::ptrdiff_t bitmapElemCount = (bitmapSize + 31) / 32;
+        std::ptrdiff_t listsOffset = alignUp(sizeof(std::uint32_t) * bitmapElemCount, alignof(std::uint64_t));
+        std::ptrdiff_t arraysSize = listsOffset + levelCount * sizeof(std::uint64_t);
+        auto hdrRange = vmm.AcquireRange(arraysSize);
+        if (!Mapper::MapWithAlloc(hdrRange.begin, hdrRange.end - hdrRange.begin, &pmm)) {
+            std::terminate();
+        }
+        auto storage = ptr_cast<byte*>(hdrRange.begin);
+        bitmap = new(storage) std::uint32_t[bitmapElemCount];
+        freeListHeads = new(storage + listsOffset) std::uint64_t[levelCount];
+        for (int i = 0; i <= maxLevel; ++i) {
+            freeListHeads[i] = InvalidPage;
+        }
+        auto current = pmm.current;
+
+        ReleaseRange({pmm.boundary, pmm.map[current].end});
+        while ((current = FindNextAvailableEntry(pmm.map, pmm.count, ++current)) != pmm.count) {
+            ReleaseRange({pmm.map[current].begin, pmm.map[current].end});
+        }
+    }
+private:
+    bool ToggleBit(std::uint64_t bit) const
+    {
+        auto index = bit / 32;
+        auto bitMask = std::uint32_t(1) << (bit % 32);
+        return (bitmap[index] ^= bitMask) & bitMask;
+    }
+
+    bool TogglePair(int level, std::uint64_t pairNum) const
+    {
+        auto pagesPerPairBlock = std::uint64_t(1) << level;
+        return ToggleBit((pairNum << (level + 1)) + pagesPerPairBlock);
+    }
+
+    auto MapExisting(std::uint64_t block) const -> BlockListElem*
+    {
+        auto ptr = Mapper::MapUnsafe(ptr_cast<std::uintptr_t>(&__mapping_window), block);
+        return std::launder(ptr_cast<BlockListElem*>(ptr));
+    }
+
+    void UnmapBlock(BlockListElem* elem) const
+    {
+        Mapper::UnmapUnsafe(elem);
+    }
+
+    void CreateBlock(std::uint64_t block, std::uint64_t prev, std::uint64_t next) const
+    {
+        auto ptr = Mapper::MapUnsafe(ptr_cast<std::uintptr_t>(&__mapping_window), block);
+        Mapper::UnmapUnsafe(new(ptr) BlockListElem{ prev, next });
+    }
+
+    auto DestroyBlock(std::uint64_t block) const -> BlockListElem
+    {
+        auto elem = MapExisting(block);
+        auto result = *elem;
+        elem->~BlockListElem();
+        UnmapBlock(elem);
+        return result;
+    }
+
+    bool InsertIntoList(int level, std::uint64_t block) const
+    {
+        if (level < maxLevel && !TogglePair(level, GetPairNum(level, block))) {
+            return false;
+        }
+        if (freeListHeads[level] != InvalidPage) {
+            auto elem = MapExisting(freeListHeads[level]);
+            elem->prev = block;
+            UnmapBlock(elem);
+        }
+        CreateBlock(block, std::uint64_t(InvalidPage), freeListHeads[level]);
+        freeListHeads[level] = block;
+        return true;
+    }
+
+    void EraseFromList(int level, std::uint64_t block) const
+    {
+        auto copy = DestroyBlock(block);
+        if (copy.next != InvalidPage) {
+            auto elem = MapExisting(copy.next);
+            elem->prev = copy.prev;
+            UnmapBlock(elem);
+        }
+        if (copy.prev != InvalidPage) {
+            auto elem = MapExisting(copy.prev);
+            elem->next = copy.next;
+            UnmapBlock(elem);
+        } else {
+            freeListHeads[level] = copy.next;
+        }
+    }
+
+    auto GetNeighbor(int level, std::uint64_t block) const -> std::uint64_t
+    {
+        auto mask = std::uint64_t(1) << (level + PageBoundBits);
+        return block ^ mask;
+    }
+
+    auto GetPairNum(int level, std::uint64_t block) const -> std::uint64_t
+    {
+        return (block - range.begin) >> (level + PageBoundBits + 1);
+    }
+
+    auto GetUpper(int level, std::uint64_t block) const -> std::uint64_t
+    {
+        return GetNeighbor(level, block) & block;
+    }
+
+    void InsertBlock(int level, std::uint64_t block) const
+    {
+        while (level < maxLevel) {
+            if (InsertIntoList(level, block)) {
+                break;
+            }
+            EraseFromList(level, GetNeighbor(level, block));
+            block = GetUpper(level, block);
+            ++level;
+        }
+    }
+
+    auto ExtractBlock(int level) const -> std::uint64_t
+    {
+        auto block = freeListHeads[level];
+        if (block == InvalidPage) {
+            return block;
+        }
+        auto copy = DestroyBlock(block);
+        freeListHeads[level] = copy.next;
+        if (TogglePair(level, GetPairNum(level, block))) {
+            std::terminate();
+        }
+        if (copy.next == InvalidPage) {
+            return block;
+        }
+        auto elem = MapExisting(copy.next);
+        elem->prev = InvalidPage;
+        UnmapBlock(elem);
+        return block;
+    }
+
+    auto AllocBlock(int level) const -> std::uint64_t
+    {
+        int currentLevel = level;
+        std::uint64_t block = InvalidPage;
+        while (currentLevel <= maxLevel) {
+            block = ExtractBlock(currentLevel);
+            if (block != InvalidPage) {
+                break;
+            }
+            currentLevel += 1;
+        }
+        if (block == InvalidPage) {
+            return block;
+        }
+        while (currentLevel > level) {
+            currentLevel -= 1;
+            if (!InsertIntoList(currentLevel, GetNeighbor(currentLevel, block))) {
+                std::terminate();
+            }
+        }
+        return block;
+    }
+public:
+    void ReleaseRange(PhyRange&& range) const
+    {
+        while (range.begin < range.end) {
+            auto level = std::min(ctz64(range.end), Log2U64(range.end - range.begin));
+            auto size = 1 << level;
+            level -= PageBoundBits;
+            range.end -= size;
+            if (!InsertIntoList(level, range.end)) {
+                std::terminate();
+            }
+        }
+    }
+
+    // ISinglePageAlloc interface
+    std::uint64_t alloc() override
+    {
+        return AllocBlock(0);
+    }
+
+    void free(std::uint64_t page) override
+    {
+        InsertBlock(0, page);
+    }
+
+    void DebugDumpLists()
+    {
+        auto putStr = [](const char* str) {
+            while (*str) {
+                // __asm__ volatile ("outb %0, $0xe9"::"a"(*str));
+                ++str;
+            }
+        };
+        putStr("\n[Buddy lists]\n");
+        auto s = std::uint64_t(PageSize);
+        char buf[17];
+        for (int i = 0; i <= maxLevel; ++i, s <<= 1) {
+            auto next = freeListHeads[i];
+            kernel::UToStr(buf, 17, s, 16);
+            putStr(buf); putStr(":");
+            while (next != InvalidPage) {
+                kernel::UToStr(buf, 17, next, 16);
+                putStr(" "); putStr(buf);
+                auto elem = MapExisting(next);
+                next = elem->next;
+                UnmapBlock(elem);
+            }
+            putStr("\n");
+        }
+    }
+private:
+    PhyRange range;
+    std::uint64_t* freeListHeads;
+    std::uint32_t* bitmap;
+    int maxLevel;
+};
+
+struct VMM
+{
+    using mem_range = BasicVMM::mem_range;
     struct free_range : address_node, size_node {};
+
+    VMM() {}
+    VMM(BuddyAlloc& pmm, const BasicVMM& vmm)
+    {
+        auto range = vmm.AcquireRange(PageSize);
+        Mapper::MapWithAlloc(range.begin, PageSize, &pmm);
+        memPool.add_storage(ptr_cast<void*>(range.begin));
+        for (std::ptrdiff_t i = 0; i < vmm.count; ++i) {
+            ReleaseRange(vmm.memRanges[i]);
+        }
+    }
 
     void ReleaseRange(const mem_range& range)
     {
@@ -759,21 +1005,16 @@ private:
 
     void AddMemoryRegion(mem_range& r)
     {
-        if (memPool.empty()) [[unlikely]] {
-            if (!Mapper::MapWithAlloc(r.begin, PageSize, &pageAlloc, &pageAlloc)) {
-                std::terminate();
-            }
-            memPool.add_storage(kernel::ptr_cast<void*>(r.begin));
-            r.begin += PageSize;
-            if (r.begin == r.end) {
-                return;
-            }
+        if (AutoExtendStorage(r)) {
+            return;
         }
         auto node = memPool.alloc();
         node->set_address(r.begin);
         node->set_size(r.end - r.begin);
         Insert(*node);
     }
+
+    bool AutoExtendStorage(mem_range& r);
 
     void Insert(free_range& node)
     {
@@ -786,8 +1027,9 @@ private:
         addressTree.Erase(node);
         sizeTree.Erase(node);
     }
-private:
+
     enum class by_end : std::uintptr_t {};
+
     struct address_comp
     {
         bool operator()(const free_range& a, const free_range& b)
@@ -811,6 +1053,7 @@ private:
             return static_cast<std::uintptr_t>(a) < b.get_address() + b.get_size();
         }
     };
+
     struct size_comp
     {
         bool operator()(const free_range& a, const free_range& b)
@@ -827,9 +1070,6 @@ private:
         }
     };
 
-public:
-    SinglePagePMM pageAlloc;
-private:
     chunked_mem_pool<free_range, PageSize> memPool;
     using address_tree_t = kernel::intrusive::AVLTree<free_range, address_comp, kernel::intrusive::BaseClassCastPolicy<address_node, free_range>>;
     using size_tree_t = kernel::intrusive::AVLTree<free_range, size_comp, kernel::intrusive::BaseClassCastPolicy<size_node, free_range>>;
@@ -837,61 +1077,157 @@ private:
     size_tree_t sizeTree;
 };
 
-auto AllocInstance() -> VMM&
+struct memory_range
 {
-    static VMM alloc;
-    return alloc;
+    void* begin;
+    ptrdiff_t size;
+};
+
+struct SystemAllocator {
+
+    VMM addressSpaceAlloc;
+    SinglePagePMM physSpaceAlloc;
+};
+
+struct Allocator {
+    using PhyRange = BuddyAlloc::PhyRange;
+
+    static auto Init() -> Allocator
+    {
+        VMM::mem_range memRanges[2] = {
+            {ptr_cast<std::uintptr_t>(__smheap_start), ptr_cast<std::uintptr_t>(__smheap_end)},
+            {-(std::uintptr_t)0x7FF000000000, -(std::uintptr_t)0x80000000}
+        };
+        BasicVMM vmm(memRanges, 2);
+        SinglePagePMM pmm;
+        if (pmm.current == pmm.count) {
+            std::terminate();
+        }
+        return {{
+            vmm,
+            std::move(pmm)
+        }, vmm};
+    }
+
+    Allocator(BuddyAlloc buddy, BasicVMM vmm) :
+        pmm(buddy),
+        vmm(pmm, vmm)
+    {}
+
+    static auto Instance() -> Allocator&
+    {
+        static Allocator alloc = Init();
+        return alloc;
+    }
+
+    auto AllocMemoryRange(std::ptrdiff_t s) -> memory_range
+    {
+        auto range = vmm.AcquireRange(s);
+        if (range.begin == range.end) [[unlikely]] {
+            return { nullptr, 0 };
+        }
+        ptrdiff_t size = range.end - range.begin;
+        if (!Mapper::MapWithAlloc(range.begin, size, &pmm)) [[unlikely]] {
+            vmm.ReleaseRange(range);
+            return { nullptr, 0 };
+        }
+        pmm.DebugDumpLists();
+        return { ptr_cast<void*>(range.begin), size };
+    }
+
+    void FreeMemoryRange(const memory_range& r)
+    {
+        VMM::mem_range range{ ptr_cast<std::uintptr_t>(r.begin), ptr_cast<std::uintptr_t>(r.begin) + r.size };
+        auto& valloc = vmm;
+        Mapper::UnmapWithAlloc(range.begin, r.size, &pmm);
+        valloc.ReleaseRange(range);
+        pmm.DebugDumpLists();
+    }
+
+    BuddyAlloc pmm;
+    VMM vmm;
+};
+
+bool VMM::AutoExtendStorage(mem_range& r)
+{
+    if (memPool.empty()) [[unlikely]] {
+        auto& alloc = Allocator::Instance().pmm;
+        if (!Mapper::MapWithAlloc(r.begin, PageSize, &alloc)) {
+            std::terminate();
+        }
+        memPool.add_storage(kernel::ptr_cast<void*>(r.begin));
+        r.begin += PageSize;
+        if (r.begin == r.end) {
+            return true;
+        }
+    }
+    return false;
 }
 
 } // namespace
 
-extern "C" int kernel_InitAllocator()
+int InitAllocator()
 {
     Mapper::Init();
-    auto& alloc = AllocInstance();
-    auto begin = ptr_cast<std::uintptr_t>(__smheap_start);
-    auto end = ptr_cast<std::uintptr_t>(__smheap_end);
-    alloc.ReleaseRange({begin, end});
-    alloc.ReleaseRange({-(std::uintptr_t)0x7FF000000000, -(std::uintptr_t)0x80000000});
+    auto& alloc = Allocator::Instance();
+    zeroPage = alloc.pmm.alloc();
     return 0;
 }
 
-extern "C" void* malloc(size_t size)
+extern "C" void* malloc(size_t s)
 {
     constexpr auto HeaderReserve = alignof(max_align_t);
-    static_assert(sizeof(std::uintptr_t) <= HeaderReserve);
-    auto& alloc = AllocInstance();
-    size += HeaderReserve;
-    auto range = alloc.AcquireRange(size);
-    if (range.begin == range.end) [[unlikely]] {
+    static_assert(sizeof(std::ptrdiff_t) <= HeaderReserve);
+    s += HeaderReserve;
+    if (s > std::numeric_limits<std::ptrdiff_t>::max()) {
         return nullptr;
     }
-    if (!Mapper::MapWithAlloc(range.begin, range.end - range.begin, &alloc.pageAlloc, &alloc.pageAlloc)) [[unlikely]] {
+    std::ptrdiff_t size = s;
+    auto& alloc = Allocator::Instance();
+    auto range = alloc.AllocMemoryRange(size);
+    if (range.size == 0) [[unlikely]] {
         return nullptr;
     }
     auto ptr = ptr_cast<unsigned char*>(range.begin);
-    new(ptr) std::uintptr_t(range.end);
+    new(range.begin) std::ptrdiff_t(range.size);
     return ptr + HeaderReserve;
-}
-
-extern "C" void* realloc(void* p, size_t newSize)
-{
-    constexpr auto HeaderReserve = alignof(max_align_t);
-    auto ptr = ptr_cast<unsigned char*>(p) - HeaderReserve;
-    VMM::mem_range range{ptr_cast<std::uintptr_t>(ptr), *kernel::As<std::uintptr_t*>(ptr)};
-    auto oldSize = range.end - range.begin - HeaderReserve;
-    auto newPtr = malloc(newSize);
-    memcpy(newPtr, p, std::min(oldSize, newSize));
-    free(p);
-    return newPtr;
 }
 
 extern "C" void free(void* p)
 {
+    if (p == nullptr) {
+        return;
+    }
     constexpr auto HeaderReserve = alignof(max_align_t);
     auto ptr = ptr_cast<unsigned char*>(p) - HeaderReserve;
-    VMM::mem_range range{ptr_cast<std::uintptr_t>(ptr), *kernel::As<std::uintptr_t*>(ptr)};
-    auto& alloc = AllocInstance();
-    Mapper::UnmapWithAlloc(range.begin, range.end - range.begin, &alloc.pageAlloc, &alloc.pageAlloc);
-    alloc.ReleaseRange(range);
+    memory_range range{ptr, *kernel::As<std::ptrdiff_t*>(ptr)};
+    auto& alloc = Allocator::Instance();
+    alloc.FreeMemoryRange(range);
+}
+
+extern "C" void* realloc(void* p, size_t newSize)
+{
+    auto oldSize = [&p]() -> std::ptrdiff_t {
+        constexpr auto HeaderReserve = alignof(max_align_t);
+        if (p == nullptr) {
+            return 0;
+        }
+        auto ptr = ptr_cast<unsigned char*>(p) - HeaderReserve;
+        return *kernel::As<std::ptrdiff_t*>(ptr) - HeaderReserve;
+    }();
+    if (std::size_t(oldSize) == newSize) {
+        return p;
+    }
+    auto newPtr = malloc(newSize);
+    if (newPtr == nullptr) {
+        return nullptr;
+    }
+    auto minSize = std::min<std::ptrdiff_t>(oldSize, newSize);
+    if (minSize != 0) {
+        std::memcpy(newPtr, p, minSize);
+    }
+    free(p);
+    return newPtr;
+}
+
 }

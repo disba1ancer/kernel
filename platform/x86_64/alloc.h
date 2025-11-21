@@ -1,37 +1,31 @@
 #ifndef ALLOC_H
 #define ALLOC_H
 
-#include "kernel/bootdata.h"
+#include <cstdint>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+namespace kernel::tgtspec {
 
-KERNEL_STRUCT(PhysicalRange) {
+struct PhysicalRange {
     union {
-        uint64_t start;
+        std::uint64_t start;
         int error;
     };
-    uint64_t size;
+    std::uint64_t size;
 };
 
-KERNEL_STRUCT(VirtualRange) {
+struct VirtualRange {
     union {
         void* start;
         int error;
     };
-    size_t size;
+    std::size_t size;
 };
 
-KERNEL_STRUCT(PageMM) {
-    PhysicalRange (*PAlloc)(PageMM* mm, void* helperPage, size_t size);
-    VirtualRange (*VAlloc)(PageMM* mm, void* page, size_t size, int flags, uint64_t pArgs);
+struct PageMM {
+    PhysicalRange (*PAlloc)(PageMM* mm, void* helperPage, std::size_t size);
+    VirtualRange (*VAlloc)(PageMM* mm, void* page, std::size_t size, int flags, std::uint64_t pArgs);
 };
 
-int kernel_InitAllocator(void);
-
-#ifdef __cplusplus
-}
-#endif
+} // namespace kernel::tgtspec
 
 #endif // ALLOC_H

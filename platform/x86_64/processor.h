@@ -1,76 +1,77 @@
 #ifndef PROCESSOR_H
 #define PROCESSOR_H
 
-#include <stdint.h>
-#include <stdalign.h>
+#include <cstdint>
 
-typedef enum i686_SegTypeFlag {
-    i686_SegType_TSS16 = 1 << 8,
-    i686_SegType_TSS32 = 9 << 8,
-    i686_SegType_TSSCommon = 1 << 8,
-    i686_SegType_TSSMask = 0x15 << 8,
-    i686_SegType_BusyTSS = 2 << 8,
+namespace i686 {
 
-    i686_SegType_LDT = 2 << 8,
+enum SegTypeFlag {
+    SegType_TSS16 = 1 << 8,
+    SegType_TSS32 = 9 << 8,
+    SegType_TSSCommon = 1 << 8,
+    SegType_TSSMask = 0x15 << 8,
+    SegType_BusyTSS = 2 << 8,
 
-    i686_SegType_ReadWrite = 0x12 << 8,
-    i686_SegType_Read = 0x10 << 8,
-    i686_SegType_Expandown = 4 << 8,
+    SegType_LDT = 2 << 8,
 
-    i686_SegType_ExecRead = 0x1A << 8,
-    i686_SegType_Exec = 0x18 << 8,
-    i686_SegType_Conforming = 4 << 8,
+    SegType_ReadWrite = 0x12 << 8,
+    SegType_Read = 0x10 << 8,
+    SegType_Expandown = 4 << 8,
 
-    i686_SegType_Accessed = 1 << 8,
-} i686_SegTypeFlag;
+    SegType_ExecRead = 0x1A << 8,
+    SegType_Exec = 0x18 << 8,
+    SegType_Conforming = 4 << 8,
 
-typedef enum i686_GateType {
-    i686_GateType_G32 = 8 << 8,
-    i686_GateType_Call = 0x14 << 8,
-    i686_GateType_Task = 0x15 << 8,
-    i686_GateType_Int = 0x16 << 8,
-    i686_GateType_Trap = 0x17 << 8,
-    i686_GateType_Mask = 0x14 << 8,
-    i686_GateType_Common = 0x4 << 8,
-} i686_GateType;
+    SegType_Accessed = 1 << 8,
+};
 
-typedef enum i686_DescFlag {
-    i686_DescFlag_UserFlag = 1 << 20,
-    i686_DescFlag_Long = 2 << 20,
-    i686_DescFlag_OP32 = 4 << 20,
-    i686_DescFlag_LimitIn4K = 8 << 20,
+enum GateType {
+    GateType_G32 = 8 << 8,
+    GateType_Call = 0x14 << 8,
+    GateType_Task = 0x15 << 8,
+    GateType_Int = 0x16 << 8,
+    GateType_Trap = 0x17 << 8,
+    GateType_Mask = 0x14 << 8,
+    GateType_Common = 0x4 << 8,
+};
 
-    i686_DescFlag_Present = 1 << 15,
-} i686_DescFlag;
+enum DescFlag {
+    DescFlag_UserFlag = 1 << 20,
+    DescFlag_Long = 2 << 20,
+    DescFlag_OP32 = 4 << 20,
+    DescFlag_LimitIn4K = 8 << 20,
 
-typedef enum i686_Interrupt {
-    i686_Interrupt_DE = 0,
-    i686_Interrupt_DB = 1,
-    i686_Interrupt_NMI = 2,
-    i686_Interrupt_BP = 3,
-    i686_Interrupt_OF = 4,
-    i686_Interrupt_BR = 5,
-    i686_Interrupt_UD = 6,
-    i686_Interrupt_NM = 7,
-    i686_Interrupt_DF = 8,
-//    i686_Interrupt_?? = 9,
-    i686_Interrupt_TS = 10,
-    i686_Interrupt_NP = 11,
-    i686_Interrupt_SS = 12,
-    i686_Interrupt_GP = 13,
-    i686_Interrupt_PF = 14,
-//    i686_Interrupt_?? = 15,
-    i686_Interrupt_MF = 16,
-    i686_Interrupt_AC = 17,
-    i686_Interrupt_MC = 18,
-    i686_Interrupt_XM = 19,
-    i686_Interrupt_VE = 20,
-} i686_Interrupt;
+    DescFlag_Present = 1 << 15,
+};
 
-typedef struct i686_Descriptor {
+enum Interrupt {
+    Interrupt_DE = 0,
+    Interrupt_DB = 1,
+    Interrupt_NMI = 2,
+    Interrupt_BP = 3,
+    Interrupt_OF = 4,
+    Interrupt_BR = 5,
+    Interrupt_UD = 6,
+    Interrupt_NM = 7,
+    Interrupt_DF = 8,
+    //  Interrupt_?? = 9,
+    Interrupt_TS = 10,
+    Interrupt_NP = 11,
+    Interrupt_SS = 12,
+    Interrupt_GP = 13,
+    Interrupt_PF = 14,
+    //  Interrupt_?? = 15,
+    Interrupt_MF = 16,
+    Interrupt_AC = 17,
+    Interrupt_MC = 18,
+    Interrupt_XM = 19,
+    Interrupt_VE = 20,
+};
+
+struct Descriptor {
     uint32_t low;
     uint32_t high;
-} i686_Descriptor;
+};
 
 #define i686_internal_MakeSegDescriptor(base, limit, dpl, typeflags) {\
     .low = (((uint32_t)(base) & 0xFFFFU) << 16U) | ((uint32_t)(limit) & 0xFFFFU),\
@@ -80,135 +81,52 @@ typedef struct i686_Descriptor {
 #define i686_internal_MakeGateDescriptor(offset, segsel, dpl, typeflags) {\
     .low = ((uint32_t)(offset) & 0xFFFFU) | (((uint32_t)(segsel) & 0xFFFFU) << 16U),\
     .high = ((uint32_t)(offset) & 0xFFFF0000U) | \
-    ((uint32_t)(typeflags) & 0x8B00) | i686_GateType_Common | (((uint32_t)(dpl) & 3) << 13) }
+    ((uint32_t)(typeflags) & 0x8B00) | GateType_Common | (((uint32_t)(dpl) & 3) << 13) }
 
-#ifndef __cplusplus
-#define i686_MakeSegDescriptor(base, limit, dpl, typeflags) i686_internal_MakeSegDescriptor(base, limit, dpl, typeflags)
-#define i686_MakeGateDescriptor(offset, segsel, dpl, typeflags) i686_internal_MakeSegDescriptor(offset, segsel, dpl, typeflags)
-#else
-constexpr inline i686_Descriptor i686_MakeSegDescriptor(uint32_t base, uint32_t limit, uint32_t dpl, uint32_t typeflags)
+constexpr inline Descriptor MakeSegDescriptor(uint32_t base, uint32_t limit, uint32_t dpl, uint32_t typeflags)
 {
     return i686_internal_MakeSegDescriptor(base, limit, dpl, typeflags);
 }
-#undef i686_internal_MakeSegDescriptor
-constexpr inline i686_Descriptor i686_MakeGateDescriptor(uint32_t offset, uint32_t segsel, uint32_t dpl, uint32_t typeflags)
+constexpr inline Descriptor MakeGateDescriptor(uint32_t offset, uint32_t segsel, uint32_t dpl, uint32_t typeflags)
 {
     return i686_internal_MakeGateDescriptor(offset, segsel, dpl, typeflags);
 }
+#undef i686_internal_MakeSegDescriptor
 #undef i686_internal_MakeGateDescriptor
-#endif
 
-typedef enum i686_PageEntryFlag {
-    i686_PageEntryFlag_Present = 1 << 0,
-    i686_PageEntryFlag_Write = 1 << 1,
-    i686_PageEntryFlag_User = 1 << 2,
-    i686_PageEntryFlag_PWT = 1 << 3, // Cache write through
-    i686_PageEntryFlag_PCD = 1 << 4, // Disable cache
-    i686_PageEntryFlag_Accessed = 1 << 5,
-    i686_PageEntryFlag_Dirty = 1 << 6,
-    i686_PageEntryFlag_PAT = 1 << 7,
-    i686_PageEntryFlag_Global = 1 << 8,
-} i686_PageEntryFlag;
+enum PageEntryFlag {
+    PageEntryFlag_Present = 1 << 0,
+    PageEntryFlag_Write = 1 << 1,
+    PageEntryFlag_User = 1 << 2,
+    PageEntryFlag_PWT = 1 << 3, // Cache write through
+    PageEntryFlag_PCD = 1 << 4, // Disable cache
+    PageEntryFlag_Accessed = 1 << 5,
+    PageEntryFlag_Dirty = 1 << 6,
+    PageEntryFlag_PAT = 1 << 7,
+    PageEntryFlag_Global = 1 << 8,
+};
 
-typedef struct i686_PageEntry {
+struct PageEntry {
     uint32_t data;
-} i686_PageEntry;
+};
 
 #define i686_internal_MakePageEntry(phyPage, flags) { ((phyPage) & 0xFFFFF000U) | ((flags) & 0xFFFU) }
 
-#ifndef __cplusplus
-#define i686_MakePageEntry(phyPage, flags) i686_internal_MakePageEntry(phyPage, flags)
-#else
-constexpr inline i686_PageEntry i686_MakePageEntry(uint32_t phyPage, uint32_t flags)
+constexpr inline PageEntry MakePageEntry(uint32_t phyPage, uint32_t flags)
 {
     return i686_internal_MakePageEntry(phyPage, flags);
 }
 #undef i686_internal_MakePageEntry
-#endif
 
-typedef enum x86_64_PageEntryFlag {
-    x86_64_PageEntryFlag_Present = 1,
-    x86_64_PageEntryFlag_Write = 2,
-    x86_64_PageEntryFlag_User = 4,
-    x86_64_PageEntryFlag_PWT = 8, // Cache write through
-    x86_64_PageEntryFlag_PCD = 16, // Disable cache
-    x86_64_PageEntryFlag_Accessed = 32,
-    x86_64_PageEntryFlag_Dirty = 64,
-    x86_64_PageEntryFlag_PAT = 128,
-    x86_64_PageEntryFlag_Global = 256,
-#ifdef __cplusplus
-    x86_64_PageEntryFlag_ExecDisable = 0x8000000000000000U
-#endif
-} x86_64_PageEntryFlag;
-#ifndef __cplusplus
-#define x86_64_PageEntryFlag_ExecDisable (0x8000000000000000U)
-#endif
-
-typedef struct x86_64_PageEntry {
-    alignas(8) uint64_t data;
-} x86_64_PageEntry;
-
-#define x86_64_internal_MakePageEntry(phyPage, flags, pk) { \
-    ((phyPage) & 0x07FFFFFFFFFFF000U) | \
-    (flags & 0x8000000000000FFF) | \
-    ((uint64_t)(pk) & 0xF) << 59 }
-
-#ifndef __cplusplus
-#define x86_64_MakePageEntry(phyPage, flags, pk) x86_64_internal_MakePageEntry(phyPage, flags, pk)
-#else
-constexpr inline x86_64_PageEntry x86_64_MakePageEntry(uint64_t phyPage, uint64_t flags, int pk = 0)
-{
-    return x86_64_internal_MakePageEntry(phyPage, flags, pk);
-}
-#undef x86_64_internal_MakePageEntry
-#endif
-
-inline uint64_t x86_64_PageEntry_GetAddr(x86_64_PageEntry entry)
-{
-    return entry.data & 0x07FFFFFFFFFFF000U;
-}
-
-inline uint64_t x86_64_PageEntry_GetFlags(x86_64_PageEntry entry)
-{
-    return entry.data & 0x8000000000000FFFU;
-}
-
-inline int x86_64_PageEntry_GetProtectionKey(x86_64_PageEntry entry)
-{
-    return (entry.data >> 59) & 0xFU;
-}
-
-inline void x86_64_FlushPageTLB(volatile void* addr)
-{
-    __asm__ volatile("invlpg (%0)"::"r"(addr):"memory");
-}
-
-inline void* x86_64_FlushPageTLB2(uintptr_t addr)
-{
-    void* result;
-    __asm__ volatile(
-        "invlpg (%1)\n\
-        movq %1, %0"
-    :"=r"(result):"r"(addr):"memory");
-    return result;
-}
-
-inline x86_64_PageEntry x86_64_LoadCR3(void)
-{
-    x86_64_PageEntry r;
-    __asm__("mov %%cr3, %0":"=r"(r.data));
-    return r;
-}
-
-typedef struct i686_InterruptFrame {
+struct InterruptFrame {
     uint32_t eip;
     uint32_t cs;
     uint32_t eflags;
     uint32_t esp;
     uint32_t ss;
-} i686_InterruptFrame;
+};
 
-typedef struct i686_tss {
+struct tss {
     uint32_t prevTask;
     uint32_t esp0;
     uint32_t ss0;
@@ -236,42 +154,110 @@ typedef struct i686_tss {
     uint32_t ldtSelector;
     uint16_t flags;
     uint16_t ioMap;
-} i686_tss;
+};
 
-typedef struct i686_RMPtr {
+struct RMPtr {
     uint16_t ptr;
     uint16_t seg;
-} i686_RMPtr;
+};
 
-inline void *i686_LoadPointer(i686_RMPtr fptr) {
+inline void *LoadPointer(RMPtr fptr) {
     uintptr_t ptr = fptr.seg;
     ptr = (ptr << 4) + fptr.ptr;
     return (void*)ptr;
 }
 
-inline i686_RMPtr i686_MakeRMPointer(void *ptr) {
+inline RMPtr MakeRMPointer(void *ptr) {
     uintptr_t fptr = (uintptr_t)ptr;
-    i686_RMPtr rslt = { .ptr = (uint16_t)(fptr & 0xF), .seg = (uint16_t)(fptr >> 4) };
+    RMPtr rslt = { .ptr = (uint16_t)(fptr & 0xF), .seg = (uint16_t)(fptr >> 4) };
     return rslt;
 }
 
-#ifdef __cplusplus
 template <typename T>
-T* i686_LoadPointer(i686_RMPtr fptr) {
-    return static_cast<T*>(i686_LoadPointer(fptr));
+T* LoadPointer(RMPtr fptr) {
+    return static_cast<T*>(LoadPointer(fptr));
 }
-#endif
 
-typedef struct x86_64_GDTR {
-    alignas(i686_Descriptor*)
+} // namespace i686
+
+namespace x86_64 {
+
+enum PageEntryFlag {
+    PageEntryFlag_Present = 1,
+    PageEntryFlag_Write = 2,
+    PageEntryFlag_User = 4,
+    PageEntryFlag_PWT = 8, // Cache write through
+    PageEntryFlag_PCD = 16, // Disable cache
+    PageEntryFlag_Accessed = 32,
+    PageEntryFlag_Dirty = 64,
+    PageEntryFlag_PAT = 128,
+    PageEntryFlag_Global = 256,
+    PageEntryFlag_ExecDisable = 0x8000000000000000U
+};
+
+struct alignas(8) PageEntry {
+    uint64_t data;
+};
+
+#define x86_64_internal_MakePageEntry(phyPage, flags, pk) { \
+    ((phyPage) & 0x07FFFFFFFFFFF000U) | \
+    (flags & 0x8000000000000FFF) | \
+    ((uint64_t)(pk) & 0xF) << 59 }
+
+constexpr inline PageEntry MakePageEntry(uint64_t phyPage, uint64_t flags, int pk = 0)
+{
+    return x86_64_internal_MakePageEntry(phyPage, flags, pk);
+}
+#undef x86_64_internal_MakePageEntry
+
+inline uint64_t PageEntry_GetAddr(PageEntry entry)
+{
+    return entry.data & 0x07FFFFFFFFFFF000U;
+}
+
+inline uint64_t PageEntry_GetFlags(PageEntry entry)
+{
+    return entry.data & 0x8000000000000FFFU;
+}
+
+inline int PageEntry_GetProtectionKey(PageEntry entry)
+{
+    return (entry.data >> 59) & 0xFU;
+}
+
+inline void FlushPageTLB(volatile void* addr)
+{
+    __asm__ volatile("invlpg (%0)"::"r"(addr):"memory");
+}
+
+inline void* FlushPageTLB2(uintptr_t addr)
+{
+    void* result;
+    __asm__ volatile(
+        "invlpg (%1)\n"
+        "movq %1, %0"
+        :"=r"(result):"r"(addr):"memory");
+    return result;
+}
+
+inline PageEntry LoadCR3(void)
+{
+    PageEntry r;
+    __asm__("mov %%cr3, %0":"=r"(r.data));
+    return r;
+}
+
+struct GDTR {
     uint32_t rsv0;
     uint16_t rsv1;
     uint16_t limit;
-    i686_Descriptor* gdt;
-} x86_64_GDTR;
+    i686::Descriptor* gdt;
+};
 
-inline void x86_64_LoadGDT(x86_64_GDTR *ptr) {
+inline void LoadGDT(GDTR *ptr) {
     __asm__ volatile("lgdt 6(%0)"::"r"(ptr));
 }
+
+} // namespace x86_64
 
 #endif // PROCESSOR_H

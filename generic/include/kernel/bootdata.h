@@ -1,8 +1,9 @@
 #ifndef KERNEL_BOOTDATA_H
 #define KERNEL_BOOTDATA_H
 
-#include "util.h"
+#include "multilang.h"
 #include <stdalign.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -22,22 +23,23 @@ enum kernel_LdrDataType {
 };
 
 enum kernel_MemoryMapEntryType {
-    kernel_MemoryMapEntryType_AvailableMemory = 1,
+    kernel_MemoryMapEntryType_AvailableMemory,
+    kernel_MemoryMapEntryType_BootReclaimable,
+    kernel_MemoryMapEntryType_SystemReclaimable,
+    kernel_MemoryMapEntryType_ReservedMemory,
 };
 
 KERNEL_STRUCT(kernel_MemoryMapEntry) {
     alignas(8)
     uint64_t begin;
-    uint64_t size;
+    uint64_t end;
     uint32_t type;
-    uint32_t flags;
 };
 
 KERNEL_STRUCT(kernel_MemoryMap) {
     alignas(8)
     uint64_t entries;
     uint64_t count;
-    uint64_t allocatedBoundary;
 };
 
 #ifdef __cplusplus

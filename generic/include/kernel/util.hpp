@@ -76,6 +76,42 @@ public:
 	~ScopeExit() noexcept(false) { final(); }
 };
 
+inline int popcount64(uint64_t v)
+{
+    v -= ((v >> 1) & 0x5555555555555555);
+    v = (v & 0x3333333333333333) + ((v >> 2) & 0x3333333333333333);
+    v = (v + (v >> 4)) & 0x0F0F0F0F0F0F0F0F;
+    v = (v + (v >> 8));
+    v = (v + (v >> 16));
+    v = (v + (v >> 32));
+    return v & 0x7f;
+}
+
+inline int clz64(uint64_t v)
+{
+    v |= v >> 1;
+    v |= v >> 2;
+    v |= v >> 4;
+    v |= v >> 8;
+    v |= v >> 16;
+    v |= v >> 32;
+    return popcount64(~v);
+}
+
+inline int ctz64(uint64_t v)
+{
+    return popcount64(~v & (v - 1));
+}
+
+inline int Log2U64(uint64_t val)
+{
+    return clz64(val) ^ 63;
+}
+
+auto UToStr(char* str, std::size_t size, unsigned long long num, int radix) -> std::size_t;
+auto UToStr(char* str, std::size_t size, unsigned long num, int radix) -> std::size_t;
+auto UToStr(char* str, std::size_t size, unsigned num, int radix) -> std::size_t;
+
 } // namespace kernel
 
 #endif // KERNEL_UTIL_HPP

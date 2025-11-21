@@ -5,24 +5,9 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#include "multilang.h"
 
 typedef unsigned char byte;
-
-#define KERNEL_STRUCT(name) \
-    typedef struct name name; \
-    struct name
-
-#define KERNEL_TYPEDEF_STRUCT(name) \
-    typedef struct name name; \
-    typedef struct name
-
-#define KERNEL_UNION(name) \
-    typedef union name name; \
-    union name
-
-#define KERNEL_UNION_STRUCT(name) \
-    typedef union name name; \
-    typedef union name
 
 KERNEL_STRUCT(kernel_DoublyLinkedListElement) {
     kernel_DoublyLinkedListElement *next;
@@ -59,25 +44,6 @@ inline void kernel_DoublyLinkedList_Remove(kernel_DoublyLinkedList *list, kernel
     }
 }
 
-inline int kernel_Log2U64(uint64_t val)
-{
-#if defined(__clang__) || defined(__GNUC__)
-    return __builtin_clzll(val) ^ 63;
-#else
-    int result = 0;
-    while (val != 1) {
-        val >>= 1;
-        ++result;
-    }
-    return result;
-#endif
-}
-
-inline int kernel_Log2U32(uint32_t val)
-{
-    return kernel_Log2U64(val);
-}
-
 #define TMINMAX(s, t)\
     inline t kernel_Min ## s(t a, t b)\
     { return (a < b) ? a : b; }\
@@ -92,8 +58,6 @@ TMINMAX(UL, unsigned long)
 TMINMAX(ULL, unsigned long long)
 
 #undef TMINMAX
-
-#ifndef __cplusplus
 
 #define kernel_MinG(s, t)\
     t : kernel_Min ## s,\
@@ -115,8 +79,6 @@ TMINMAX(ULL, unsigned long long)
     kernel_MaxG(LL, long long)\
     )(a, b)
 
-#endif
-
 #define TMINMAX(bits)\
     inline uint##bits##_t kernel_MinU##bits(uint##bits##_t a, uint##bits##_t b)\
     { return (a < b) ? a : b; }\
@@ -134,45 +96,8 @@ TMINMAX(64)
 
 #undef TMINMAX
 
-size_t kernel_ULLToStr(char* str, size_t size, unsigned long long num, int radix);
-size_t kernel_ULToStr(char* str, size_t size, unsigned long num, int radix);
-size_t kernel_UToStr(char* str, size_t size, unsigned num, int radix);
-
-#ifndef __cplusplus
-#define kernel_UToStr(str, size, num, radix) _Generic(num,\
-    unsigned long long : kernel_ULLToStr(str, size, num, radix),\
-    unsigned long : kernel_ULToStr(str, size, num, radix),\
-    unsigned : kernel_UToStr(str, size, num, radix))
-#endif
-
 #ifdef __cplusplus
-} // extern "C"
-
-#include <concepts>
-
-namespace kernel {
-
-#define NS_FUNC(prefix, name) inline constexpr auto& name = :: prefix ## name;
-
-NS_FUNC(kernel_, ULLToStr)
-NS_FUNC(kernel_, ULToStr)
-
-inline size_t UToStr(char* str, size_t size, unsigned num, int radix) {
-    return kernel_UToStr(str, size, num, radix);
 }
-
-inline size_t UToStr(char* str, size_t size, unsigned long num, int radix) {
-    return kernel_ULToStr(str, size, num, radix);
-}
-
-inline size_t UToStr(char* str, size_t size, unsigned long long num, int radix) {
-    return kernel_ULLToStr(str, size, num, radix);
-}
-
-#undef NS_FUNC
-
-}
-
 #endif
 
 #endif // KERNEL_UTIL_H

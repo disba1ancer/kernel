@@ -5,7 +5,6 @@ __binary_load_address = -0x80000000;
 SECTIONS {
     . = __binary_load_address + SIZEOF_HEADERS;
     .text : ALIGN(16) {
-	*(.text.interrupt)
         *(.init*)
         *(.fini*)
         *(.text*)
@@ -39,16 +38,14 @@ SECTIONS {
         __bss_end = .;
     }
     . = ALIGN(CONSTANT(MAXPAGESIZE));
-    __smheap_start = .;
+    __mapping_window = .;
+    . += CONSTANT(MAXPAGESIZE);
     __stack_size = 64K;
-    . = -__stack_size;
-    __smheap_end = .;
     .stack : {
         __init_stack_start = .;
-        . += __stack_size - CONSTANT(MAXPAGESIZE);
+        . += __stack_size;
         __init_stack_end = .;
     }
-    __mapping_window = .;
-    idt_base_low = ABSOLUTE(idt_handlers) & 0xFFFF;
-    idt_base_high = idt_base_low ^ ABSOLUTE(idt_handlers);
+    __smheap_start = .;
+    __smheap_end = -CONSTANT(MAXPAGESIZE);
 }

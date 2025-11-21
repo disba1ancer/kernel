@@ -11,9 +11,7 @@
 
 #include "processor.h"
 
-EXTERN i686_Descriptor gdt[];
-
-EXTERN_C void InitGDT(void);
+extern "C" i686::Descriptor gdt[];
 
 #undef EXTERN_C
 

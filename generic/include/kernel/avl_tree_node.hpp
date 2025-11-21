@@ -20,7 +20,7 @@ template <typename Tag>
 struct AVLTreeNode : AVLTreeNode<> {};
 
 template <typename T>
-struct AVLTreeNodeTraits;
+struct AVLTreeNodeTraits : T::avl_tree_node_trait {};
 
 template <typename T>
 struct AVLTreeNodeTraits<AVLTreeNode<T>> {

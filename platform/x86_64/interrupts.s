@@ -10,22 +10,22 @@ LimitOfIDT = SizeOfIDT - 1
 .align 64
 idt:
 
-.section .text.interrupt, "ax"
+.text
 .global idt_handlers
 idt_handlers:
 .rept IDTEntries
-.section .text.interrupt, "ax"
+.text
 0:      push    (i ^ 0x80) - 0x80
         jmp     universal_handler
 .section .data.kinterrupts, "aw"
         .word   0x8E00
-        .word   0x20
+        .word   0x10
         .quad   0b
         .long   0
 .set i, i + 1
 .endr
 
-.section .text.interrupt, "ax"
+.text
 universal_handler:
 .cfi_startproc
 .cfi_adjust_cfa_offset 8
@@ -79,10 +79,9 @@ universal_handler:
         iretq
 .cfi_endproc
 
-.text
-.global kernel_x86_64_EnableInterrupts
-.type kernel_x86_64_EnableInterrupts, @function
-kernel_x86_64_EnableInterrupts:
+.global kernel_x86_64_IDTFixupAndLoad
+.type kernel_x86_64_IDTFixupAndLoad, @function
+kernel_x86_64_IDTFixupAndLoad:
         mov     r8, rbx
         xor     ecx, ecx
         lea     rbx, idt[rip]
@@ -99,7 +98,11 @@ kernel_x86_64_EnableInterrupts:
         jb      0b
         mov     rbx, r8
         lidt    idtr[rip]
+        ret
 
+.global kernel_x86_64_EnableInterrupts
+.type kernel_x86_64_EnableInterrupts, @function
+kernel_x86_64_EnableInterrupts:
         in      al, 0x21
         movzx   esi, al
         in      al, 0xA1

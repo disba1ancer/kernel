@@ -4,19 +4,17 @@ add_library(platform ALIAS platform_x86_64)
 target_sources(platform_x86_64 PRIVATE
     alloc.cpp
     alloc.h
-    exit.c
-    init.c
+    exit.cpp
     init.cpp
     init.s
-    interrupts.c
+    interrupts.cpp
     interrupts.h
     interrupts.s
     memcmp.s
     memcpymove.s
     memset.s
-    processor.c
     processor.h
-    segment.c
+    segment.cpp
     segment.h
     strchr.s
     strcmp.s

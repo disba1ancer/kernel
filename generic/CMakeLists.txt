@@ -5,6 +5,7 @@ add_library(generic OBJECT
     include/kernel/bootdata.h
     include/kernel/list.hpp
     include/kernel/list_node.hpp
+    include/kernel/multilang.h
     include/kernel/node.hpp
     include/kernel/util.h
     include/kernel/util.hpp
