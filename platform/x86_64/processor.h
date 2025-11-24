@@ -258,6 +258,25 @@ inline void LoadGDT(GDTR *ptr) {
     __asm__ volatile("lgdt 6(%0)"::"r"(ptr));
 }
 
+struct tss {
+    uint32_t pad;
+    uint32_t _r0;
+    uint64_t rsp0;
+    uint64_t rsp1;
+    uint64_t rsp2;
+    uint64_t _r1;
+    uint64_t ist1;
+    uint64_t ist2;
+    uint64_t ist3;
+    uint64_t ist4;
+    uint64_t ist5;
+    uint64_t ist6;
+    uint64_t ist7;
+    uint64_t _r2;
+    uint16_t _r3;
+    uint16_t ioMap;
+};
+
 } // namespace x86_64
 
 #endif // PROCESSOR_H

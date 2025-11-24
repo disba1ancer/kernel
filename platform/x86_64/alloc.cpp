@@ -210,12 +210,6 @@ struct Mapper
             }
             Set(i, p);
         }
-        if (end > begin) {
-            auto addr = CanonizeAddr(std::uintptr_t(begin) * PageSize);
-            std::memset(ptr_cast<void*>(addr), 0, PageSize);
-            addr = CanonizeAddr(std::uintptr_t(end - 1) * PageSize);
-            std::memset(ptr_cast<void*>(addr), 0, PageSize);
-        }
         return true;
     }
     static void ClearEntries(
@@ -661,7 +655,7 @@ auto FindLastMemRegion(const kernel_MemoryMapEntry* map, std::ptrdiff_t count, s
     return result;
 }
 
-struct BuddyAlloc : ISinglePageAlloc {
+struct BuddyAlloc final : ISinglePageAlloc {
     struct PhyRange {
         std::uint64_t begin;
         std::uint64_t end;
@@ -688,6 +682,9 @@ struct BuddyAlloc : ISinglePageAlloc {
         std::ptrdiff_t listsOffset = alignUp(sizeof(std::uint32_t) * bitmapElemCount, alignof(std::uint64_t));
         std::ptrdiff_t arraysSize = listsOffset + levelCount * sizeof(std::uint64_t);
         auto hdrRange = vmm.AcquireRange(arraysSize);
+        if (hdrRange.begin == hdrRange.end) {
+            std::terminate();
+        }
         if (!Mapper::MapWithAlloc(hdrRange.begin, hdrRange.end - hdrRange.begin, &pmm)) {
             std::terminate();
         }
@@ -740,6 +737,7 @@ private:
         auto elem = MapExisting(block);
         auto result = *elem;
         elem->~BlockListElem();
+        std::memset(elem, 0, PageSize);
         UnmapBlock(elem);
         return result;
     }
@@ -912,7 +910,12 @@ struct VMM
     VMM(BuddyAlloc& pmm, const BasicVMM& vmm)
     {
         auto range = vmm.AcquireRange(PageSize);
-        Mapper::MapWithAlloc(range.begin, PageSize, &pmm);
+        if (range.begin == range.end) {
+            std::terminate();
+        }
+        if (!Mapper::MapWithAlloc(range.begin, PageSize, &pmm)) {
+            std::terminate();
+        }
         memPool.add_storage(ptr_cast<void*>(range.begin));
         for (std::ptrdiff_t i = 0; i < vmm.count; ++i) {
             ReleaseRange(vmm.memRanges[i]);
