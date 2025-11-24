@@ -1,46 +1,52 @@
 #include "interrupts.h"
+#include "kernel/util.hpp"
 #include "processor.h"
 
 namespace kernel::tgtspec {
 
-void UniversalExceptionHandler(int interrupt_index, ExceptionFrame* stackframe);
-void UniversalInterruptHandler(int interrupt_index, InterruptFrame* stackframe);
-static void IRQHandler(int irqN, InterruptFrame* stackframe);
+static void IRQHandler(int irqN, PFFrame* stackframe);
 extern "C" void kernel_x86_64_KeyboardIRQ(void);
 
-extern "C" void kernel_x86_64_SystemInterruptHandler(int interrupt_index,
-    void* stackframeptr)
+extern "C" unsigned char magic_handler[];
+
+int GetInterruptNumber(PFFrame* stackframeptr)
 {
-    switch (interrupt_index) {
-    case i686::Interrupt_DF:
-    case i686::Interrupt_TS:
-    case i686::Interrupt_NP:
-    case i686::Interrupt_SS:
-    case i686::Interrupt_GP:
-    case i686::Interrupt_PF:
-    case i686::Interrupt_AC:
-        UniversalExceptionHandler(interrupt_index, static_cast<ExceptionFrame*>(stackframeptr));
-        break;
-    default:
-        UniversalInterruptHandler(interrupt_index, static_cast<InterruptFrame*>(stackframeptr));
-        break;
+    if (!(stackframeptr->error & 16)) {
+        return i686::Interrupt_PF;
     }
+    if (stackframeptr->cs != 8) {
+        return i686::Interrupt_PF;
+    }
+    auto intrbase = ptr_cast<std::uintptr_t>(magic_handler);
+    auto diff = stackframeptr->rip - intrbase;
+    if (diff >= 32) {
+        return i686::Interrupt_PF;
+    }
+    auto secframe = ptr_cast<ErrorFrame*>(stackframeptr);
+    stackframeptr->ss = secframe->ss;
+    stackframeptr->rsp = secframe->rsp;
+    stackframeptr->rflags = secframe->rflags;
+    stackframeptr->cs = secframe->cs;
+    stackframeptr->rip = secframe->rip;
+    stackframeptr->error = secframe->error;
+    if (diff != i686::Interrupt_GP) {
+        return int(diff);
+    }
+    if (!(stackframeptr->error & 2)) {
+        return i686::Interrupt_GP;
+    }
+    return int(stackframeptr->error) >> 3;
 }
 
-void UniversalExceptionHandler(int interrupt_index, ExceptionFrame* stackframe)
+extern "C" void kernel_x86_64_PageFault(PFFrame* stackframeptr)
 {
-    stackframe->local_rsp += 8;
-    while (1);
+    int intNum = GetInterruptNumber(stackframeptr);
+    if (intNum < 0x40) return;
+    if (intNum >= 0x50) return;
+    IRQHandler(intNum - 0x40, stackframeptr);
 }
 
-void UniversalInterruptHandler(int interrupt_index, InterruptFrame* stackframe)
-{
-    if (interrupt_index < 0x40) return;
-    if (interrupt_index >= 0x50) return;
-    IRQHandler(interrupt_index - 0x40, stackframe);
-}
-
-void IRQHandler(int irqN, InterruptFrame* stackframe)
+void IRQHandler(int irqN, PFFrame* stackframe)
 {
     switch (irqN) {
     case 1:

@@ -46,6 +46,8 @@ SECTIONS {
         . += __stack_size;
         __init_stack_end = .;
     }
+    magic_handler = .;
+    . += CONSTANT(MAXPAGESIZE);
     __smheap_start = .;
     __smheap_end = -CONSTANT(MAXPAGESIZE);
 }
