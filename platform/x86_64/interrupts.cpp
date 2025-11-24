@@ -3,13 +3,13 @@
 
 namespace kernel::tgtspec {
 
-void UniversalExceptionHandler(int interrupt_index, ExceptionFrame* stackframe);
+void UniversalExceptionHandler(int interrupt_index, InterruptFrame* stackframe);
 void UniversalInterruptHandler(int interrupt_index, InterruptFrame* stackframe);
 static void IRQHandler(int irqN, InterruptFrame* stackframe);
 extern "C" void kernel_x86_64_KeyboardIRQ(void);
 
 extern "C" void kernel_x86_64_SystemInterruptHandler(int interrupt_index,
-    void* stackframeptr)
+    InterruptFrame* stackframeptr)
 {
     switch (interrupt_index) {
     case i686::Interrupt_DF:
@@ -19,19 +19,16 @@ extern "C" void kernel_x86_64_SystemInterruptHandler(int interrupt_index,
     case i686::Interrupt_GP:
     case i686::Interrupt_PF:
     case i686::Interrupt_AC:
-        UniversalExceptionHandler(interrupt_index, static_cast<ExceptionFrame*>(stackframeptr));
+        UniversalExceptionHandler(interrupt_index, stackframeptr);
         break;
     default:
-        UniversalInterruptHandler(interrupt_index, static_cast<InterruptFrame*>(stackframeptr));
+        UniversalInterruptHandler(interrupt_index, stackframeptr);
         break;
     }
 }
 
-void UniversalExceptionHandler(int interrupt_index, ExceptionFrame* stackframe)
-{
-    stackframe->local_rsp += 8;
-    while (1);
-}
+void UniversalExceptionHandler(int interrupt_index, InterruptFrame* stackframe)
+{}
 
 void UniversalInterruptHandler(int interrupt_index, InterruptFrame* stackframe)
 {

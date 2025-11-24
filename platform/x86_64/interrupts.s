@@ -15,11 +15,18 @@ idt:
 idt_handlers:
 .rept IDTEntries
 .text
-0:      push    (i ^ 0x80) - 0x80
+0:
+.cfi_startproc
+.if !(i == 8 || i - 10 < 5 || i == 17)
+        sub     rsp, 8
+.endif
+.cfi_adjust_cfa_offset 8
+        push    (i ^ 0x80) - 0x80
         jmp     universal_handler
+.cfi_endproc
 .section .data.kinterrupts, "aw"
         .word   0x8E00
-        .word   0x10
+        .word   8
         .quad   0b
         .long   0
 .set i, i + 1
@@ -28,28 +35,26 @@ idt_handlers:
 .text
 universal_handler:
 .cfi_startproc
-.cfi_adjust_cfa_offset 8
-        sub     rsp, 0x78
-.cfi_adjust_cfa_offset 0x78
+.cfi_adjust_cfa_offset 16
+        sub     rsp, 0x70
+.cfi_adjust_cfa_offset 0x70
         mov       0[rsp], rax
-        lea     rax, [rsp + 0x80]
         mov       8[rsp], rcx
         mov      16[rsp], rdx
         mov      24[rsp], rbx
-        mov      32[rsp], rax
-        mov      40[rsp], rbp
-.cfi_rel_offset rbp, 40
-        mov      48[rsp], rsi
-        mov      56[rsp], rdi
-        movzx   rdi, byte ptr 120[rsp]
-        mov      64[rsp], r8
-        mov      72[rsp], r9
-        mov      80[rsp], r10
-        mov      88[rsp], r11
-        mov      96[rsp], r12
-        mov     104[rsp], r13
-        mov     112[rsp], r14
-        mov     120[rsp], r15
+        mov      32[rsp], rbp
+.cfi_rel_offset rbp, 32
+        mov      40[rsp], rsi
+        mov      48[rsp], rdi
+        movzx   edi, byte ptr 112[rsp]
+        mov      56[rsp], r8
+        mov      64[rsp], r9
+        mov      72[rsp], r10
+        mov      80[rsp], r11
+        mov      88[rsp], r12
+        mov      96[rsp], r13
+        mov     104[rsp], r14
+        mov     112[rsp], r15
         mov     rsi, rsp
         mov     rbp, rsp
 .cfi_def_cfa_register rbp
@@ -62,19 +67,19 @@ universal_handler:
         mov     rcx,   8[rsp]
         mov     rdx,  16[rsp]
         mov     rbx,  24[rsp]
-        mov     rbp,  40[rsp]
+        mov     rbp,  32[rsp]
 .cfi_restore rbp
-        mov     rsi,  48[rsp]
-        mov     rdi,  56[rsp]
-        mov     r8 ,  64[rsp]
-        mov     r9 ,  72[rsp]
-        mov     r10,  80[rsp]
-        mov     r11,  88[rsp]
-        mov     r12,  96[rsp]
-        mov     r13, 104[rsp]
-        mov     r14, 112[rsp]
-        mov     r15, 120[rsp]
-        mov     rsp,  32[rsp]
+        mov     rsi,  40[rsp]
+        mov     rdi,  48[rsp]
+        mov     r8 ,  56[rsp]
+        mov     r9 ,  64[rsp]
+        mov     r10,  72[rsp]
+        mov     r11,  80[rsp]
+        mov     r12,  88[rsp]
+        mov     r13,  96[rsp]
+        mov     r14, 104[rsp]
+        mov     r15, 112[rsp]
+        add     rsp,  0x80
 .cfi_adjust_cfa_offset -0x80
         iretq
 .cfi_endproc
