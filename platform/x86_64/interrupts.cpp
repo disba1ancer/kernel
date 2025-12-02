@@ -40,9 +40,6 @@ void UniversalInterruptHandler(int interrupt_index, InterruptFrame* stackframe)
 void IRQHandler(int irqN, InterruptFrame* stackframe)
 {
     switch (irqN) {
-    case 1:
-        kernel_x86_64_KeyboardIRQ();
-        break;
     case 7:
         if (kernel_x86_64_IsSpuriousIRQ(0)) {
             return;

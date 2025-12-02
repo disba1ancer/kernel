@@ -62,18 +62,18 @@ constexpr D ptr_cast(S* ptr)
 }
 
 template <PointerType D, CompatCVAs<std::remove_pointer_t<D>> S>
-D As(S* ptr)
+D as(S* ptr)
 {
     return std::launder(ptr_cast<D>(ptr));
 }
 
 template <typename T>
-class ScopeExit {
+class scope_exit {
 	T final;
 public:
-	ScopeExit(const T& onFinal) : final(onFinal) {}
-	ScopeExit(T&& onFinal) : final(std::move(onFinal)) {}
-	~ScopeExit() noexcept(false) { final(); }
+    scope_exit(const T& onFinal) : final(onFinal) {}
+    scope_exit(T&& onFinal) : final(std::move(onFinal)) {}
+    ~scope_exit() noexcept(false) { final(); }
 };
 
 inline int popcount64(uint64_t v)

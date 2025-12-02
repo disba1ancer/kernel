@@ -17,11 +17,12 @@ idt_handlers:
 .text
 0:
 .cfi_startproc
-.if !(i == 8 || i - 10 < 5 || i == 17)
+.if !(i == 8 || (10 <= i && i <= 14) || i == 17)
         sub     rsp, 8
 .endif
 .cfi_adjust_cfa_offset 8
         push    (i ^ 0x80) - 0x80
+.cfi_adjust_cfa_offset 8
         jmp     universal_handler
 .cfi_endproc
 .section .data.kinterrupts, "aw"
@@ -84,9 +85,9 @@ universal_handler:
         iretq
 .cfi_endproc
 
-.global kernel_x86_64_IDTFixupAndLoad
-.type kernel_x86_64_IDTFixupAndLoad, @function
-kernel_x86_64_IDTFixupAndLoad:
+.global kernel_x86_64_EnableBasicInterrupts
+.type kernel_x86_64_EnableBasicInterrupts, @function
+kernel_x86_64_EnableBasicInterrupts:
         mov     r8, rbx
         xor     ecx, ecx
         lea     rbx, idt[rip]
@@ -103,11 +104,15 @@ kernel_x86_64_IDTFixupAndLoad:
         jb      0b
         mov     rbx, r8
         lidt    idtr[rip]
+        in      al, 0x70
+        and     al, 0x7f
+        out     0x70, al
+        in      al, 0x71
         ret
 
-.global kernel_x86_64_EnableInterrupts
-.type kernel_x86_64_EnableInterrupts, @function
-kernel_x86_64_EnableInterrupts:
+.global kernel_x86_64_EnableIRQs
+.type kernel_x86_64_EnableIRQs, @function
+kernel_x86_64_EnableIRQs:
         in      al, 0x21
         movzx   esi, al
         in      al, 0xA1
@@ -145,11 +150,6 @@ kernel_x86_64_EnableInterrupts:
         mov     eax, edi
         out     0xA1, al
         out     0x80, al
-
-        in      al, 0x70
-        and     al, 0x7f
-        out     0x70, al
-        in      al, 0x71
 
         sti
 

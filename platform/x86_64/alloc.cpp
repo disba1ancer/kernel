@@ -9,7 +9,7 @@
  * + NoAlloc = 1,
  *   Map = 2,
  *   AllocMask = 3,
- *   WriteToggle = 4,
+ *   Write = 4,
  *   Execute = 8,
  *   System = 16,
  *   NoCache = 32,
@@ -357,8 +357,8 @@ struct SinglePagePMM : ISinglePageAlloc
         if (lastFree != InvalidPage) {
             auto result = lastFree;
             auto ptr = ptr_cast<std::uintptr_t>(&__mapping_window);
-            auto next = ptr_cast<std::uint64_t*>(Mapper::MapUnsafe(ptr, result));
-            lastFree = *std::launder(next);
+            auto next = as<std::uint64_t*>(Mapper::MapUnsafe(ptr, result));
+            lastFree = *next;
             std::memset(next, 0, PageSize);
             Mapper::UnmapUnsafe(next);
             return result;
@@ -383,8 +383,8 @@ struct SinglePagePMM : ISinglePageAlloc
     void free(std::uint64_t addr)
     {
         auto ptr = ptr_cast<std::uintptr_t>(&__mapping_window);
-        auto next = ptr_cast<std::uint64_t*>(Mapper::MapUnsafe(ptr, addr));
-        *std::launder(next) = lastFree;
+        auto next = as<std::uint64_t*>(Mapper::MapUnsafe(ptr, addr));
+        *next = lastFree;
         Mapper::UnmapUnsafe(next);
         lastFree = addr;
     }
@@ -411,19 +411,19 @@ struct address_node {
     std::uintptr_t addressCompressed;
     auto get_address() const -> std::uintptr_t
     {
-        return reset_bits(addressCompressed, 3);
+        return reset_bits(addressCompressed, 7);
     }
     void set_address(std::uintptr_t addr)
     {
-        addressCompressed = addr | (addressCompressed & 3);
+        addressCompressed = addr | (addressCompressed & 7);
     }
     auto get_balance() const -> int
     {
-        return ((addressCompressed & 3) ^ 2) - 2;
+        return ((addressCompressed & 7) ^ 4) - 4;
     }
     void set_balance(int balance)
     {
-        addressCompressed = reset_bits(addressCompressed, 3) | (balance & 3);
+        addressCompressed = reset_bits(addressCompressed, 7) | (balance & 7);
     }
 };
 
@@ -434,19 +434,19 @@ struct size_node {
     std::ptrdiff_t sizeCompressed;
     auto get_size() const -> std::ptrdiff_t
     {
-        return reset_bits(sizeCompressed, 3);
+        return reset_bits(sizeCompressed, 7);
     }
     void set_size(std::ptrdiff_t size)
     {
-        sizeCompressed = size | (sizeCompressed & 3);
+        sizeCompressed = size | (sizeCompressed & 7);
     }
     auto get_balance() const -> int
     {
-        return ((sizeCompressed & 3) ^ 2) - 2;
+        return ((sizeCompressed & 7) ^ 4) - 4;
     }
     void set_balance(int balance)
     {
-        sizeCompressed = reset_bits(sizeCompressed, 3) | (balance & 3);
+        sizeCompressed = reset_bits(sizeCompressed, 7) | (balance & 7);
     }
 };
 
@@ -655,6 +655,36 @@ auto FindLastMemRegion(const kernel_MemoryMapEntry* map, std::ptrdiff_t count, s
     return result;
 }
 
+bool IsAvailRg(
+    const kernel_MemoryMapEntry *entries,
+    std::ptrdiff_t count,
+    std::uint64_t addr
+    ) {
+    while (1) {
+        if (count == 0) {
+            return false;
+        }
+        auto newCount = count / 2;
+        auto entry = entries + newCount;
+        if (addr < entry->begin) {
+            count = newCount;
+            continue;
+        }
+        if (addr >= entry->end) {
+            entries = entry + 1;
+            count -= newCount + 1;
+            continue;
+        }
+        switch (entry->type) {
+        case kernel_MemoryMapEntryType_AvailableMemory:
+        case kernel_MemoryMapEntryType_BootReclaimable:
+        case kernel_MemoryMapEntryType_SystemReclaimable:
+            return true;
+        }
+        return false;
+    }
+}
+
 struct BuddyAlloc final : ISinglePageAlloc {
     struct PhyRange {
         std::uint64_t begin;
@@ -718,7 +748,7 @@ private:
     auto MapExisting(std::uint64_t block) const -> BlockListElem*
     {
         auto ptr = Mapper::MapUnsafe(ptr_cast<std::uintptr_t>(&__mapping_window), block);
-        return std::launder(ptr_cast<BlockListElem*>(ptr));
+        return as<BlockListElem*>(ptr);
     }
 
     void UnmapBlock(BlockListElem* elem) const
@@ -873,7 +903,7 @@ public:
     {
         auto putStr = [](const char* str) {
             while (*str) {
-                // __asm__ volatile ("outb %0, $0xe9"::"a"(*str));
+                __asm__ volatile ("outb %0, $0xe9"::"a"(*str));
                 ++str;
             }
         };
@@ -899,6 +929,8 @@ private:
     std::uint64_t* freeListHeads;
     std::uint32_t* bitmap;
     int maxLevel;
+    const kernel_MemoryMapEntry* entries;
+    std::ptrdiff_t count;
 };
 
 struct VMM
@@ -1086,12 +1118,6 @@ struct memory_range
     ptrdiff_t size;
 };
 
-struct SystemAllocator {
-
-    VMM addressSpaceAlloc;
-    SinglePagePMM physSpaceAlloc;
-};
-
 struct Allocator {
     using PhyRange = BuddyAlloc::PhyRange;
 
@@ -1112,7 +1138,7 @@ struct Allocator {
         }, vmm};
     }
 
-    Allocator(BuddyAlloc buddy, BasicVMM vmm) :
+    Allocator(BuddyAlloc&& buddy, const BasicVMM& vmm) :
         pmm(buddy),
         vmm(pmm, vmm)
     {}
@@ -1174,6 +1200,36 @@ int InitAllocator()
     Mapper::Init();
     auto& alloc = Allocator::Instance();
     zeroPage = alloc.pmm.alloc();
+    auto* map = FindMemoryMap(loaderData);
+    auto entries = ptr_cast<kernel_MemoryMapEntry*>(map->entries);
+    struct RgCheckDealloc : InvalidPageAlloc
+    {
+        RgCheckDealloc(Allocator& alloc) :
+            alloc(alloc)
+        {
+            auto* map = FindMemoryMap(loaderData);
+            auto entries = ptr_cast<kernel_MemoryMapEntry*>(map->entries);
+            this->entries = new kernel_MemoryMapEntry[map->count];
+            count = map->count;
+            std::memcpy(this->entries, entries, sizeof(kernel_MemoryMapEntry) * map->count);
+        }
+        ~RgCheckDealloc()
+        {
+            delete[] entries;
+        }
+        void free(std::uint64_t page) override
+        {
+            if (!IsAvailRg(entries, count, page)) {
+                return;
+            }
+            alloc.pmm.free(page);
+        }
+        Allocator& alloc;
+        kernel_MemoryMapEntry* entries;
+        std::ptrdiff_t count;
+    } dealloc(alloc);
+    loaderData = nullptr;
+    Mapper::UnmapWithAlloc(0, 0x100000, &dealloc, &alloc.pmm);
     return 0;
 }
 
@@ -1203,7 +1259,7 @@ extern "C" void free(void* p)
     }
     constexpr auto HeaderReserve = alignof(max_align_t);
     auto ptr = ptr_cast<unsigned char*>(p) - HeaderReserve;
-    memory_range range{ptr, *kernel::As<std::ptrdiff_t*>(ptr)};
+    memory_range range{ptr, *kernel::as<std::ptrdiff_t*>(ptr)};
     auto& alloc = Allocator::Instance();
     alloc.FreeMemoryRange(range);
 }
@@ -1216,7 +1272,7 @@ extern "C" void* realloc(void* p, size_t newSize)
             return 0;
         }
         auto ptr = ptr_cast<unsigned char*>(p) - HeaderReserve;
-        return *kernel::As<std::ptrdiff_t*>(ptr) - HeaderReserve;
+        return *kernel::as<std::ptrdiff_t*>(ptr) - HeaderReserve;
     }();
     if (std::size_t(oldSize) == newSize) {
         return p;
