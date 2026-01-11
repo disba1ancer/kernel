@@ -35,6 +35,7 @@
 #include <exception>
 #include <new>
 #include "kernel/bootdata.h"
+#include "kernel/debug.h"
 #include "kernel/util.hpp"
 #include "kernel/avl_tree.hpp"
 #include "kernel/list.hpp"
@@ -901,28 +902,24 @@ public:
 
     void DebugDumpLists()
     {
-        auto putStr = [](const char* str) {
-            while (*str) {
-                __asm__ volatile ("outb %0, $0xe9"::"a"(*str));
-                ++str;
-            }
-        };
-        putStr("\n[Buddy lists]\n");
+        namespace d = debug;
+        d::println("[Buddy lists]");
         auto s = std::uint64_t(PageSize);
         char buf[17];
         for (int i = 0; i <= maxLevel; ++i, s <<= 1) {
             auto next = freeListHeads[i];
             kernel::UToStr(buf, 17, s, 16);
-            putStr(buf); putStr(":");
+            d::puts(buf); d::putc(':');
             while (next != InvalidPage) {
                 kernel::UToStr(buf, 17, next, 16);
-                putStr(" "); putStr(buf);
+                d::putc(' '); d::puts(buf);
                 auto elem = MapExisting(next);
                 next = elem->next;
                 UnmapBlock(elem);
             }
-            putStr("\n");
+            d::putc('\n');
         }
+        d::putc('\n');
     }
 private:
     PhyRange range;

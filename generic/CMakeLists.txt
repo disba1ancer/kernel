@@ -3,6 +3,7 @@ add_library(generic OBJECT
     include/kernel/avl_tree.hpp
     include/kernel/avl_tree_node.hpp
     include/kernel/bootdata.h
+    include/kernel/debug.h
     include/kernel/list.hpp
     include/kernel/list_node.hpp
     include/kernel/multilang.h
