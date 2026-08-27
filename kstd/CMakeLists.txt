@@ -8,5 +8,6 @@ add_library(kstd OBJECT
     include/string.h
     qsort.c
     stdlib.c
+    include/kstd/string_impl.h
 )
 target_include_directories(kstd PUBLIC include)

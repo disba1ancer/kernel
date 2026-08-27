@@ -2,22 +2,26 @@
 #define _CSTDLIB
 
 #ifdef __cplusplus
-#define _KSTD_CPPMODE 1
 
-#ifdef _STDLIB_H
+#include "kstd/stdlib_impl.h"
 
-#undef _STDLIB_H
-#include "stdlib.h"
-#define _STDLIB_H
+namespace std {
 
-#else
+using namespace ::kstd::stdlib;
 
-#include "stdlib.h"
-#undef _STDLIB_H
+#define GENERATE(type, namepref)\
+inline type abs(type val)\
+{\
+    return namepref##abs(val);\
+}
 
-#endif
+using ::kstd::stdlib::abs;
+GENERATE(long, l)
+GENERATE(long long, ll)
+#undef GENERATE
 
-#undef _KSTD_CPPMODE
+}
+
 #endif // __cplusplus
 
 #endif // _CSTDLIB
