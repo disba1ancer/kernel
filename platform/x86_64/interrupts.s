@@ -18,7 +18,7 @@ idt_handlers:
 0:
 .cfi_startproc
 .if !(i == 8 || (10 <= i && i <= 14) || i == 17)
-        sub     rsp, 8
+        push	0
 .endif
 .cfi_adjust_cfa_offset 8
         push    (i ^ 0x80) - 0x80
