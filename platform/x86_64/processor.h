@@ -247,6 +247,21 @@ inline PageEntry LoadCR3(void)
     return r;
 }
 
+struct CPUIDLeaf
+{
+    uint32_t ebx;
+    uint32_t edx;
+    uint32_t ecx;
+    uint32_t eax;
+};
+
+inline CPUIDLeaf cpuid(uint32_t root, uint32_t leaf = 0)
+{
+    CPUIDLeaf r;
+    __asm__("cpuid":"+a"(r.eax),"+c"(r.ecx),"=d"(r.edx),"=b"(r.ebx));
+    return r;
+}
+
 struct GDTR {
     uint32_t rsv0;
     uint16_t rsv1;
