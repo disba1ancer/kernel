@@ -23,10 +23,12 @@ enum kernel_LdrDataType {
 };
 
 enum kernel_MemoryMapEntryType {
+    kernel_MemoryMapEntryType_ReservedMemory,
     kernel_MemoryMapEntryType_AvailableMemory,
     kernel_MemoryMapEntryType_BootReclaimable,
     kernel_MemoryMapEntryType_SystemReclaimable,
-    kernel_MemoryMapEntryType_ReservedMemory,
+    kernel_MemoryMapEntryType_Kernel,
+    kernel_MemoryMapEntryType_Inherited,
 };
 
 KERNEL_STRUCT(kernel_MemoryMapEntry) {
