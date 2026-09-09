@@ -258,6 +258,8 @@ struct CPUIDLeaf
 inline CPUIDLeaf cpuid(uint32_t root, uint32_t leaf = 0)
 {
     CPUIDLeaf r;
+    r.eax = root;
+    r.ecx = leaf;
     __asm__("cpuid":"+a"(r.eax),"+c"(r.ecx),"=d"(r.edx),"=b"(r.ebx));
     return r;
 }

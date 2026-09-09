@@ -23,7 +23,7 @@ target_sources(platform_x86_64 PRIVATE
 )
 
 target_link_libraries(platform_x86_64 PUBLIC kstd generic)
-target_link_options(platform_x86_64 INTERFACE -z max-page-size=0x1000 -B ${CMAKE_BINARY_DIR} -specs=${CMAKE_CURRENT_SOURCE_DIR}/specs.txt)
+target_link_options(platform_x86_64 INTERFACE -B ${CMAKE_BINARY_DIR} -specs=${CMAKE_CURRENT_SOURCE_DIR}/specs.txt)
 
 add_custom_target(crti
     ALL ${CMAKE_ASM_COMPILER} -Wa,--divide -g -c ${CMAKE_CURRENT_SOURCE_DIR}/crti.s -o ${CMAKE_BINARY_DIR}/crti.o

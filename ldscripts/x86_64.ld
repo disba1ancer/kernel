@@ -1,6 +1,6 @@
 ENTRY(_start)
 
-__binary_load_address = -0x80000000;
+__binary_load_address = 0;
 
 SECTIONS {
     . = __binary_load_address + SIZEOF_HEADERS;
