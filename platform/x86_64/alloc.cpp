@@ -98,7 +98,7 @@ auto CanonizeAddr(std::uintptr_t addr) -> std::uintptr_t
     return ((addr & 0xFFFFFFFFFFFF) ^ 0x800000000000) - 0x800000000000;
 }
 
-bool Is1GBPagesPagesSupported()
+bool Is1GBPagesSupported()
 {
     auto r = x86_64::cpuid(0x80000000);
     if (r.eax < 1) {
@@ -139,7 +139,11 @@ struct Mapper
     static constexpr auto PageDirectoriesStartIndex = 0400000000000U;
     static constexpr auto PML4StartIndex = 0400400400000U;
     static constexpr auto LevelBits = 9;
-    static constexpr auto DirectMapAddr = -0x800000000000;
+    static std::uint64_t directMapAddr;
+    static void* GetObject(std::uint64_t addr)
+    {
+        return ptr_cast<void*>(directMapAddr + addr);
+    }
     static void Init()
     {}
     static auto Entry(std::ptrdiff_t index) -> x86_64::PageEntry&
@@ -351,6 +355,8 @@ struct Mapper
         UnmapWithAlloc(vaddr, size, &alloc, ptAlloc);
     }
 };
+
+std::uint64_t Mapper::directMapAddr;
 
 struct SinglePagePMM : ISinglePageAlloc
 {
